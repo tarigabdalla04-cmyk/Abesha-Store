@@ -80,7 +80,7 @@ app.get("/api/fazer/catalog", async (req, res) => {
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
-// جلب فئات شحن الألعاب من Fazer
+// جلب جميع فئات شحن الألعاب من Fazer مع متابعة الصفحات
 app.get("/api/fazer/topups", async (req, res) => {
   try {
     if (!process.env.FAZER_API_KEY) {
@@ -90,19 +90,59 @@ app.get("/api/fazer/topups", async (req, res) => {
       });
     }
 
-    const response = await fetch(
-      `${FAZER_API}/topups?limit=50`,
-      {
-        headers: {
-          "X-API-Key": process.env.FAZER_API_KEY,
-          "Accept": "application/json"
-        }
+    let allItems = [];
+    let cursor = null;
+
+    for (let page = 0; page < 20; page++) {
+      const params = new URLSearchParams({
+        limit: "50"
+      });
+
+      if (cursor) {
+        params.set("cursor", cursor);
       }
-    );
 
-    const data = await response.json();
+      const response = await fetch(
+        `${FAZER_API}/topups?${params.toString()}`,
+        {
+          headers: {
+            "X-API-Key": process.env.FAZER_API_KEY,
+            "Accept": "application/json"
+          }
+        }
+      );
 
-    res.status(response.status).json(data);
+      const data = await response.json();
+
+      if (!response.ok) {
+        return res.status(response.status).json(data);
+      }
+
+      if (Array.isArray(data.items)) {
+        allItems.push(...data.items);
+      }
+
+      const nextCursor = data.meta?.next_cursor;
+
+      if (!nextCursor || data.meta?.has_more === false) {
+        break;
+      }
+
+      cursor = nextCursor;
+    }
+
+    res.json({
+      ok: true,
+      kind: "topup",
+      items: allItems,
+      meta: {
+        total: allItems.length,
+        limit: allItems.length,
+        next_cursor: null,
+        has_more: false
+      }
+    });
+
   } catch (error) {
     res.status(500).json({
       ok: false,
@@ -110,47 +150,6 @@ app.get("/api/fazer/topups", async (req, res) => {
     });
   }
 });
-// جلب عروض فئة معينة من Fazer
-app.get("/api/fazer/topups/offers", async (req, res) => {
-  try {
-    if (!process.env.FAZER_API_KEY) {
-      return res.status(500).json({
-        ok: false,
-        error: "FAZER_API_KEY is not configured"
-      });
-    }
-
-    const { category_id } = req.query;
-
-    if (!category_id) {
-      return res.status(400).json({
-        ok: false,
-        error: "category_id is required"
-      });
-    }
-
-    const response = await fetch(
-      `${FAZER_API}/topups/offers?category_id=${encodeURIComponent(category_id)}`,
-      {
-        headers: {
-          "X-API-Key": process.env.FAZER_API_KEY,
-          "Accept": "application/json"
-        }
-      }
-    );
-
-    const data = await response.json();
-
-    res.status(response.status).json(data);
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-// توافق مؤقت مع واجهة المتجر لاختبار اتصال الكتالوج
-app.get("/api/fazer/catalog", async (req, res) => {
   try {
     if (!process.env.FAZER_API_KEY) {
       return res.status(500).json({
