@@ -149,6 +149,36 @@ app.get("/api/fazer/topups/offers", async (req, res) => {
     });
   }
 });
+// توافق مؤقت مع واجهة المتجر لاختبار اتصال الكتالوج
+app.get("/api/fazer/catalog", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    const response = await fetch(
+      `${FAZER_API}/topups?limit=50`,
+      {
+        headers: {
+          "X-API-Key": process.env.FAZER_API_KEY,
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    res.status(response.status).json(data);
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
