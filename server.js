@@ -293,6 +293,143 @@ app.get("/api/fazer/giftcards/cards", async (req, res) => {
     });
   }
 });
+// طبقة المنتجات الموحدة لـ ABESHA STORE
+app.get("/api/products", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    const headers = {
+      "X-API-Key": process.env.FAZER_API_KEY,
+      "Accept": "application/json"
+    };
+
+    // جلب جميع فئات شحن الألعاب
+    async function getTopupCategories() {
+      const items = [];
+      let cursor = null;
+
+      for (let page = 0; page < 20; page++) {
+        const params = new URLSearchParams({
+          limit: "50"
+        });
+
+        if (cursor) {
+          params.set("cursor", cursor);
+        }
+
+        const response = await fetch(
+          `${FAZER_API}/topups?${params.toString()}`,
+          { headers }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data?.message || data?.error || "Failed to load topups"
+          );
+        }
+
+        if (Array.isArray(data.items)) {
+          items.push(...data.items);
+        }
+
+        const nextCursor = data.meta?.next_cursor;
+
+        if (!nextCursor || data.meta?.has_more === false) {
+          break;
+        }
+
+        cursor = nextCursor;
+      }
+
+      return items;
+    }
+
+    // جلب جميع فئات بطاقات الهدايا
+    async function getGiftCardCategories() {
+      const items = [];
+      let cursor = null;
+
+      for (let page = 0; page < 20; page++) {
+        const params = new URLSearchParams({
+          limit: "50"
+        });
+
+        if (cursor) {
+          params.set("cursor", cursor);
+        }
+
+        const response = await fetch(
+          `${FAZER_API}/giftcards?${params.toString()}`,
+          { headers }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data?.message || data?.error || "Failed to load gift cards"
+          );
+        }
+
+        if (Array.isArray(data.items)) {
+          items.push(...data.items);
+        }
+
+        const nextCursor = data.meta?.next_cursor;
+
+        if (!nextCursor || data.meta?.has_more === false) {
+          break;
+        }
+
+        cursor = nextCursor;
+      }
+
+      return items;
+    }
+
+    const [topups, giftcards] = await Promise.all([
+      getTopupCategories(),
+      getGiftCardCategories()
+    ]);
+
+    const products = [
+      ...topups.map(item => ({
+        id: item.category_id,
+        name: item.name,
+        type: "topup",
+        note: item.note || "",
+        fields: item.fields || []
+      })),
+
+      ...giftcards.map(item => ({
+        id: item.category_id,
+        name: item.name,
+        type: "gift_card",
+        note: item.note || "",
+        fields: item.fields || []
+      }))
+    ];
+
+    res.json({
+      ok: true,
+      total: products.length,
+      products
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
