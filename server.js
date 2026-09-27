@@ -160,7 +160,7 @@ app.get("/api/fazer/topups", async (req, res) => {
     }
 
     const response = await fetch(
-      `${FAZER_API}/topups/offers?category_id=${encodeURIComponent(req.query.category_id)}`
+            `${FAZER_API}/topups/offers?category_id=${encodeURIComponent(req.query.category_id)}`,
       {
         headers: {
           "X-API-Key": process.env.FAZER_API_KEY,
