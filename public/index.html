@@ -409,7 +409,7 @@
 
   async function loadCatalog() {
     try {
-      const response = await fetch("/api/fazer/catalog");
+      const response = await fetch("/api/fazer/topups");
 
       if (!response.ok) {
         throw new Error("Catalog request failed");
