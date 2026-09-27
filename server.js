@@ -150,7 +150,8 @@ app.get("/api/fazer/topups", async (req, res) => {
     });
   }
 });
-  try {
+ app.get("/api/fazer/topups/offers", async (req, res) => { 
+   try {
     if (!process.env.FAZER_API_KEY) {
       return res.status(500).json({
         ok: false,
