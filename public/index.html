@@ -416,7 +416,7 @@
       }
 
       const data = await response.json();
-      products = getArray(data);
+      products = data.items || [];
 
       if (!products.length) {
         statusBox.textContent = "الكتالوج متصل";
