@@ -179,6 +179,76 @@ app.get("/api/fazer/topups", async (req, res) => {
     });
   }
 });
+// جلب فئات بطاقات الهدايا من Fazer
+app.get("/api/fazer/giftcards", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    let allItems = [];
+    let cursor = null;
+
+    for (let page = 0; page < 20; page++) {
+      const params = new URLSearchParams({
+        limit: "50"
+      });
+
+      if (cursor) {
+        params.set("cursor", cursor);
+      }
+
+      const response = await fetch(
+        `${FAZER_API}/giftcards?${params.toString()}`,
+        {
+          headers: {
+            "X-API-Key": process.env.FAZER_API_KEY,
+            "Accept": "application/json"
+          }
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return res.status(response.status).json(data);
+      }
+
+      if (Array.isArray(data.items)) {
+        allItems.push(...data.items);
+      }
+
+      const nextCursor = data.meta?.next_cursor;
+
+      if (!nextCursor || data.meta?.has_more === false) {
+        break;
+      }
+
+      cursor = nextCursor;
+    }
+
+    res.json({
+      ok: true,
+      kind: "gift_card",
+      items: allItems,
+      meta: {
+        total: allItems.length,
+        limit: allItems.length,
+        next_cursor: null,
+        has_more: false
+      }
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
