@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABESHA STORE | متجر أبيشا</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: Arial, Tahoma, sans-serif;
+      background: #f4f7fb;
+      color: #172033;
+    }
+
+    header {
+      background: linear-gradient(135deg, #084fa8, #062f68);
+      color: white;
+      padding: 18px 16px 22px;
+      border-radius: 0 0 22px 22px;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .cart {
+      background: rgba(255,255,255,.15);
+      border: 1px solid rgba(255,255,255,.25);
+      padding: 9px 13px;
+      border-radius: 12px;
+    }
+
+    .hero {
+      margin-top: 18px;
+    }
+
+    .hero h1 {
+      font-size: 24px;
+      margin-bottom: 7px;
+    }
+
+    .hero p {
+      opacity: .9;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+
+    .search {
+      margin-top: 16px;
+      background: white;
+      border-radius: 14px;
+      padding: 13px 15px;
+      color: #555;
+      width: 100%;
+      border: none;
+      outline: none;
+      font-size: 15px;
+    }
+
+    main {
+      max-width: 900px;
+      margin: auto;
+      padding: 18px 14px 40px;
+    }
+
+    .section-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin: 5px 0 14px;
+    }
+
+    .section-title h2 {
+      font-size: 19px;
+    }
+
+    .status {
+      font-size: 12px;
+      color: #687386;
+    }
+
+    .categories {
+      display: flex;
+      gap: 9px;
+      overflow-x: auto;
+      padding-bottom: 12px;
+    }
+
+    .category {
+      flex: 0 0 auto;
+      background: white;
+      border: 1px solid #dce4ef;
+      padding: 9px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .category.active {
+      background: #084fa8;
+      color: white;
+      border-color: #084fa8;
+    }
+
+    .products {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .product {
+      background: white;
+      border-radius: 16px;
+      padding: 14px;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 3px 12px rgba(0,0,0,.04);
+    }
+
+    .icon {
+      width: 46px;
+      height: 46px;
+      border-radius: 12px;
+      background: #eaf2ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      margin-bottom: 10px;
+    }
+
+    .product h3 {
+      font-size: 15px;
+      margin-bottom: 7px;
+      line-height: 1.4;
+    }
+
+    .product .type {
+      color: #758197;
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .price {
+      font-weight: 800;
+      color: #084fa8;
+      font-size: 16px;
+    }
+
+    .buy {
+      width: 100%;
+      border: none;
+      background: #084fa8;
+      color: white;
+      padding: 10px;
+      border-radius: 10px;
+      margin-top: 11px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .empty {
+      background: white;
+      padding: 25px 15px;
+      text-align: center;
+      border-radius: 16px;
+      color: #697589;
+      line-height: 1.8;
+      grid-column: 1 / -1;
+    }
+
+    footer {
+      text-align: center;
+      color: #8a94a6;
+      font-size: 12px;
+      padding: 20px;
+    }
+
+    @media (min-width: 700px) {
+      .products {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+<header>
+  <div class="top">
+    <div class="logo">ABESHA STORE</div>
+    <div class="cart">🛒 السلة <span id="cartCount">0</span></div>
+  </div>
+
+  <div class="hero">
+    <h1>متجر أبيشا للمنتجات الرقمية</h1>
+    <p>
+      ألعاب، بطاقات، اشتراكات ومنتجات رقمية متنوعة
+    </p>
+  </div>
+
+  <input
+    id="search"
+    class="search"
+    type="search"
+    placeholder="ابحث عن منتج..."
+  >
+</header>
+
+<main>
+
+  <div class="section-title">
+    <h2>التصنيفات</h2>
+  </div>
+
+  <div class="categories">
+    <button class="category active" data-cat="all">الكل</button>
+    <button class="category" data-cat="game">الألعاب</button>
+    <button class="category" data-cat="gift">بطاقات الهدايا</button>
+    <button class="category" data-cat="subscription">الاشتراكات</button>
+    <button class="category" data-cat="steam">Steam</button>
+    <button class="category" data-cat="mobile">شحن الألعاب</button>
+  </div>
+
+  <div class="section-title">
+    <h2>المنتجات</h2>
+    <span id="status" class="status">جاري الاتصال...</span>
+  </div>
+
+  <div id="products" class="products">
+    <div class="empty">
+      جاري تحميل المنتجات...
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  © 2026 ABESHA STORE — جميع الحقوق محفوظة
+</footer>
+
+<script>
+  const USD_TO_SDG = 8050;
+  const MARKUP = 0.10;
+
+  let products = [];
+  let selectedCategory = "all";
+
+  const productsBox = document.getElementById("products");
+  const statusBox = document.getElementById("status");
+  const searchBox = document.getElementById("search");
+
+  function getArray(data) {
+    if (Array.isArray(data)) return data;
+
+    if (Array.isArray(data.products)) return data.products;
+    if (Array.isArray(data.catalog)) return data.catalog;
+    if (Array.isArray(data.data)) return data.data;
+    if (data.data && Array.isArray(data.data.products)) {
+      return data.data.products;
+    }
+
+    return [];
+  }
+
+  function getName(p) {
+    return p.name ||
+           p.title ||
+           p.product_name ||
+           p.productName ||
+           "منتج رقمي";
+  }
+
+  function getUSD(p) {
+    return Number(
+      p.price_usd ??
+      p.priceUSD ??
+      p.price ??
+      p.cost ??
+      0
+    );
+  }
+
+  function getCategory(p) {
+    const text = (
+      (p.category || "") + " " +
+      (p.type || "") + " " +
+      getName(p)
+    ).toLowerCase();
+
+    if (text.includes("steam")) return "steam";
+    if (
+      text.includes("gift") ||
+      text.includes("google") ||
+      text.includes("apple") ||
+      text.includes("playstation") ||
+      text.includes("xbox")
+    ) return "gift";
+
+    if (
+      text.includes("netflix") ||
+      text.includes("spotify") ||
+      text.includes("subscription")
+    ) return "subscription";
+
+    if (
+      text.includes("pubg") ||
+      text.includes("free fire") ||
+      text.includes("roblox") ||
+      text.includes("valorant")
+    ) return "mobile";
+
+    return "game";
+  }
+
+  function salePrice(usd) {
+    if (!usd) return null;
+
+    const cost = usd * USD_TO_SDG;
+    const sale = cost * (1 + MARKUP);
+
+    return Math.ceil(sale / 100) * 100;
+  }
+
+  function render() {
+    const search = searchBox.value.trim().toLowerCase();
+
+    const filtered = products.filter(p => {
+      const name = getName(p).toLowerCase();
+      const cat = getCategory(p);
+
+      const matchesSearch =
+        !search || name.includes(search);
+
+      const matchesCategory =
+        selectedCategory === "all" ||
+        cat === selectedCategory;
+
+      return matchesSearch && matchesCategory;
+    });
+
+    if (!filtered.length) {
+      productsBox.innerHTML = `
+        <div class="empty">
+          لا توجد منتجات مطابقة حاليًا.
+        </div>
+      `;
+      return;
+    }
+
+    productsBox.innerHTML = filtered.map((p, index) => {
+      const name = getName(p);
+      const usd = getUSD(p);
+      const price = salePrice(usd);
+
+      return `
+        <div class="product">
+          <div class="icon">🎮</div>
+
+          <h3>${escapeHTML(name)}</h3>
+
+          <div class="type">
+            ${escapeHTML(p.category || p.type || "منتج رقمي")}
+          </div>
+
+          <div class="price">
+            ${price ? price.toLocaleString() + " SDG" : "السعر قريبًا"}
+          </div>
+
+          <button
+            class="buy"
+            onclick="addToCart(${index})"
+          >
+            أضف للسلة
+          </button>
+        </div>
+      `;
+    }).join("");
+  }
+
+  function escapeHTML(value) {
+    return String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  let cartCount = 0;
+
+  function addToCart() {
+    cartCount++;
+    document.getElementById("cartCount").textContent = cartCount;
+  }
+
+  async function loadCatalog() {
+    try {
+      const response = await fetch("/api/fazer/catalog");
+
+      if (!response.ok) {
+        throw new Error("Catalog request failed");
+      }
+
+      const data = await response.json();
+      products = getArray(data);
+
+      if (!products.length) {
+        statusBox.textContent = "الكتالوج متصل";
+        productsBox.innerHTML = `
+          <div class="empty">
+            تم الاتصال بمصدر المنتجات،
+            وسيتم عرض المنتجات بعد مزامنة الكتالوج.
+          </div>
+        `;
+        return;
+      }
+
+      statusBox.textContent =
+        products.length + " منتج";
+
+      render();
+
+    } catch (error) {
+      console.error(error);
+
+      statusBox.textContent = "بانتظار الاتصال";
+
+      productsBox.innerHTML = `
+        <div class="empty">
+          المتجر جاهز، لكن لم يتم تحميل الكتالوج حاليًا.<br>
+          سيتم تفعيل المنتجات بعد إعداد اتصال Fazer في السيرفر.
+        </div>
+      `;
+    }
+  }
+
+  searchBox.addEventListener("input", render);
+
+  document.querySelectorAll(".category").forEach(button => {
+    button.addEventListener("click", () => {
+
+      document.querySelectorAll(".category")
+        .forEach(b => b.classList.remove("active"));
+
+      button.classList.add("active");
+
+      selectedCategory =
+        button.dataset.cat;
+
+      render();
+    });
+  });
+
+  loadCatalog();
+</script>
+
+</body>
+</html>
