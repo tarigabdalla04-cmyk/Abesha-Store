@@ -249,6 +249,50 @@ app.get("/api/fazer/giftcards", async (req, res) => {
     });
   }
 });
+// جلب عروض بطاقات الهدايا داخل فئة محددة
+app.get("/api/fazer/giftcards/cards", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    const categoryId = req.query.category_id;
+
+    if (!categoryId) {
+      return res.status(400).json({
+        ok: false,
+        error: "category_id is required"
+      });
+    }
+
+    const response = await fetch(
+      `${FAZER_API}/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`,
+      {
+        headers: {
+          "X-API-Key": process.env.FAZER_API_KEY,
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    res.json(data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
