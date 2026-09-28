@@ -563,6 +563,39 @@ app.get("/api/fazer/steam-topup/rates", async (req, res) => {
     });
   }
 });
+// جلب كتالوج Steam Gifts من Fazer
+app.get("/api/fazer/steam-gifts/games", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    const limit = req.query.limit || "100";
+
+    const response = await fetch(
+      `${FAZER_API}/steam-gifts/games?limit=${encodeURIComponent(limit)}`,
+      {
+        headers: {
+          "X-API-Key": process.env.FAZER_API_KEY,
+          "Accept": "application/json"
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    res.status(response.status).json(data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
