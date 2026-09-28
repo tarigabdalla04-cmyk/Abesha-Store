@@ -596,6 +596,111 @@ app.get("/api/fazer/steam-gifts/games", async (req, res) => {
     });
   }
 });
+// الكتالوج الموحد لـ ABESHA STORE
+app.get("/api/catalog", async (req, res) => {
+  try {
+    if (!process.env.FAZER_API_KEY) {
+      return res.status(500).json({
+        ok: false,
+        error: "FAZER_API_KEY is not configured"
+      });
+    }
+
+    const headers = {
+      "X-API-Key": process.env.FAZER_API_KEY,
+      "Accept": "application/json"
+    };
+
+    async function getAllCategories(endpoint) {
+      const items = [];
+      let cursor = null;
+
+      for (let page = 0; page < 20; page++) {
+        const params = new URLSearchParams({
+          limit: "50"
+        });
+
+        if (cursor) {
+          params.set("cursor", cursor);
+        }
+
+        const response = await fetch(
+          `${FAZER_API}/${endpoint}?${params.toString()}`,
+          { headers }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data?.message ||
+            data?.error ||
+            `Failed to load ${endpoint}`
+          );
+        }
+
+        if (Array.isArray(data.items)) {
+          items.push(...data.items);
+        }
+
+        const nextCursor = data.meta?.next_cursor;
+
+        if (!nextCursor || data.meta?.has_more === false) {
+          break;
+        }
+
+        cursor = nextCursor;
+      }
+
+      return items;
+    }
+
+    const [topups, giftcards, gamekeys] = await Promise.all([
+      getAllCategories("topups"),
+      getAllCategories("giftcards"),
+      getAllCategories("gamekeys")
+    ]);
+
+    const products = [
+      ...topups.map(item => ({
+        id: item.category_id,
+        name: item.name,
+        type: "topup",
+        note: item.note || "",
+        fields: item.fields || []
+      })),
+
+      ...giftcards.map(item => ({
+        id: item.category_id,
+        name: item.name,
+        type: "gift_card",
+        note: item.note || "",
+        fields: item.fields || []
+      })),
+
+      ...gamekeys.map(item => ({
+        id: item.game_id || item.category_id,
+        name: item.name,
+        type: "game_key",
+        platform: item.platform || "",
+        region: item.region || "",
+        region_restriction: item.region_restriction || false
+      }))
+    ];
+
+    res.json({
+      ok: true,
+      total: products.length,
+      products
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
