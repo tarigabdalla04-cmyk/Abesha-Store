@@ -1,3 +1,9 @@
+
 {
-  "published": []
+  "published": [],
+  "pricing": {
+    "usdToSdg": 8300,
+    "referenceUsdToSdg": 8275,
+    "markup": 0.10
+  }
 }
