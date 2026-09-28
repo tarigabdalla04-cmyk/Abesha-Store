@@ -701,6 +701,31 @@ app.get("/api/catalog", async (req, res) => {
     });
   }
 });
+// المنتجات المنشورة في ABESHA STORE
+app.get("/api/catalog/published", (req, res) => {
+  try {
+    const fs = require("fs");
+
+    const configPath = path.join(__dirname, "catalog-config.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+
+    res.json({
+      ok: true,
+      total: Array.isArray(config.published)
+        ? config.published.length
+        : 0,
+      published: Array.isArray(config.published)
+        ? config.published
+        : []
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
