@@ -726,6 +726,13 @@ app.get("/api/catalog/published", (req, res) => {
     });
   }
 });
+// اختبار إعدادات لوحة الإدارة
+app.get("/api/admin/status", (req, res) => {
+  res.json({
+    ok: true,
+    adminKeyConfigured: Boolean(process.env.ADMIN_KEY)
+  });
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
