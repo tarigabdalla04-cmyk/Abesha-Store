@@ -260,8 +260,13 @@ async function openProductOffers(productId, productType, productName) {
       return;
     }
 
-    const USD_TO_SDG = 8050;
-    const MARKUP = 0.10;
+    const settingsResponse = await fetch("/api/catalog/published");
+const settingsData = await settingsResponse.json();
+
+const pricing = settingsData.pricing || {};
+
+const USD_TO_SDG = Number(pricing.usdToSdg) || 8300;
+const MARKUP = Number(pricing.markup) || 0.10;
 
     let message =
       "📦 " + name + "\n\n" +
