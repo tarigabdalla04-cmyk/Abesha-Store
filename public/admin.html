@@ -266,6 +266,7 @@ const settingsData = await settingsResponse.json();
 const pricing = settingsData.pricing || {};
 
 const USD_TO_SDG = Number(pricing.usdToSdg) || 8300;
+    const REFERENCE_USD_TO_SDG = Number(pricing.referenceUsdToSdg) || 8275;
 const MARKUP = Number(pricing.markup) || 0.10;
 
     let message =
@@ -282,8 +283,16 @@ const MARKUP = Number(pricing.markup) || 0.10;
       );
 
       const cost = usd * USD_TO_SDG;
-      const sale = cost * (1 + MARKUP);
-      const profit = sale - cost;
+
+const referenceSale =
+  usd * REFERENCE_USD_TO_SDG * (1 + MARKUP);
+
+const minimumSale =
+  cost * 1.05;
+
+const sale = Math.max(referenceSale, minimumSale);
+
+const profit = sale - cost;
 
       message +=
         (index + 1) + ". " +
