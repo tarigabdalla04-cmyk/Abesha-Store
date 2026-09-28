@@ -167,21 +167,36 @@ function renderProducts() {
   });
 
   document.getElementById("products").innerHTML =
-    filtered.slice(0, 100).map(product => `
-      <div class="product">
+  filtered.slice(0, 100).map(product => `
+    <div class="product">
 
-        <strong>${escapeHtml(product.name || "")}</strong>
+      <strong>${escapeHtml(product.name || "")}</strong>
 
-        <div class="type">
-          النوع: ${escapeHtml(product.type || "")}
-        </div>
-
-        <div>
-          ID: ${escapeHtml(product.id || "")}
-        </div>
-
+      <div class="type">
+        النوع: ${escapeHtml(product.type || "")}
       </div>
-    `).join("");
+
+      <div>
+        ID: ${escapeHtml(product.id || "")}
+      </div>
+
+      <button
+        onclick="openProductOffers('${escapeHtml(product.id || "")}', '${escapeHtml(product.type || "")}', '${escapeHtml(product.name || "")}')"
+        style="
+          margin-top:12px;
+          padding:10px 16px;
+          border-radius:8px;
+          border:1px solid #1976ff;
+          background:#0b3d78;
+          color:white;
+          cursor:pointer;
+        "
+      >
+        إدارة العروض
+      </button>
+
+    </div>
+  `).join("");
 
   if (!filtered.length) {
     document.getElementById("products").innerHTML =
