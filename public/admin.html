@@ -264,10 +264,12 @@ async function openProductOffers(productId, productType, productName) {
     const MARKUP = 0.10;
 
     let message =
-      "📦 " +
-      name +
-      "\n\n" +
-      "العروض والأسعار المقترحة:\n\n";
+      "📦 " + name + "\n\n" +
+      "سعر الصرف: 1 USD = " +
+      USD_TO_SDG.toLocaleString("en-US") +
+      " SDG\n" +
+      "الزيادة: 10%\n\n" +
+      "العروض:\n\n";
 
     offers.forEach((offer, index) => {
       const usd = Number(
@@ -279,14 +281,16 @@ async function openProductOffers(productId, productType, productName) {
       const profit = sale - cost;
 
       message +=
-        (index + 1) +
-        ". " +
+        (index + 1) + ". " +
         (offer.name || offer.title || offer.id || "عرض") +
+        "\n" +
+        "سعر الدولار الامريكي: $" +
+        usd.toFixed(4) +
         "\n" +
         "التكلفة: " +
         Math.round(cost).toLocaleString("en-US") +
         " SDG\n" +
-        "سعر البيع المقترح: " +
+        "البيع المقترح: " +
         Math.round(sale).toLocaleString("en-US") +
         " SDG\n" +
         "الربح: " +
