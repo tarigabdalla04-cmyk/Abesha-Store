@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABESHA STORE - الإدارة</title>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #061a35;
+      color: white;
+      padding: 20px;
+    }
+
+    .box {
+      max-width: 900px;
+      margin: auto;
+    }
+
+    h1 {
+      color: white;
+    }
+
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 13px;
+      margin: 8px 0;
+      border-radius: 8px;
+      border: 1px solid #1d5fae;
+      background: #0b2749;
+      color: white;
+      font-size: 16px;
+    }
+
+    button {
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      background: #0b63ce;
+      color: white;
+      font-size: 16px;
+    }
+
+    #status {
+      margin: 15px 0;
+    }
+
+    .product {
+      background: #0b2749;
+      border: 1px solid #163f6b;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 10px 0;
+    }
+
+    .type {
+      color: #8bbcff;
+      font-size: 13px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="box">
+
+  <h1>ABESHA STORE — الإدارة</h1>
+
+  <div id="loginBox">
+    <p>أدخل مفتاح الإدارة:</p>
+
+    <input
+      id="adminKey"
+      type="password"
+      placeholder="ADMIN KEY"
+    >
+
+    <button onclick="loadCatalog()">
+      دخول
+    </button>
+  </div>
+
+  <div id="status"></div>
+
+  <input
+    id="search"
+    type="text"
+    placeholder="ابحث عن منتج..."
+    style="display:none;"
+    oninput="renderProducts()"
+  >
+
+  <div id="products"></div>
+
+</div>
+
+<script>
+
+let products = [];
+
+async function loadCatalog() {
+
+  const key = document.getElementById("adminKey").value.trim();
+
+  if (!key) {
+    alert("أدخل مفتاح الإدارة");
+    return;
+  }
+
+  sessionStorage.setItem("ABESHA_ADMIN_KEY", key);
+
+  document.getElementById("status").textContent =
+    "جاري تحميل الكتالوج...";
+
+  try {
+
+    const response = await fetch("/api/admin/catalog", {
+      headers: {
+        "X-Admin-Key": key
+      }
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "فشل الدخول");
+    }
+
+    products = data.products || [];
+
+    document.getElementById("loginBox").style.display = "none";
+
+    document.getElementById("search").style.display = "block";
+
+    document.getElementById("status").textContent =
+      "تم تحميل " + products.length + " منتج";
+
+    renderProducts();
+
+  } catch (error) {
+
+    sessionStorage.removeItem("ABESHA_ADMIN_KEY");
+
+    document.getElementById("status").textContent =
+      "فشل الدخول: " + error.message;
+  }
+}
+
+function renderProducts() {
+
+  const search =
+    document.getElementById("search").value
+      .trim()
+      .toLowerCase();
+
+  const filtered = products.filter(product => {
+
+    const name = (product.name || "").toLowerCase();
+
+    const id = (product.id || "").toLowerCase();
+
+    return name.includes(search) || id.includes(search);
+  });
+
+  document.getElementById("products").innerHTML =
+    filtered.slice(0, 100).map(product => `
+      <div class="product">
+
+        <strong>${escapeHtml(product.name || "")}</strong>
+
+        <div class="type">
+          النوع: ${escapeHtml(product.type || "")}
+        </div>
+
+        <div>
+          ID: ${escapeHtml(product.id || "")}
+        </div>
+
+      </div>
+    `).join("");
+
+  if (!filtered.length) {
+    document.getElementById("products").innerHTML =
+      "<p>لا توجد نتائج.</p>";
+  }
+}
+
+function escapeHtml(value) {
+
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+</script>
+
+</body>
+</html>
