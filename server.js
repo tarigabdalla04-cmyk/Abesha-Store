@@ -733,6 +733,45 @@ app.get("/api/admin/status", (req, res) => {
     adminKeyConfigured: Boolean(process.env.ADMIN_KEY)
   });
 });
+// حماية مسارات الإدارة
+function requireAdmin(req, res, next) {
+  const adminKey = req.headers["x-admin-key"];
+
+  if (!process.env.ADMIN_KEY) {
+    return res.status(500).json({
+      ok: false,
+      error: "ADMIN_KEY is not configured"
+    });
+  }
+
+  if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized"
+    });
+  }
+
+  next();
+}
+
+// كتالوج الإدارة المحمي
+app.get("/api/admin/catalog", requireAdmin, async (req, res) => {
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${PORT}/api/catalog`
+    );
+
+    const data = await response.json();
+
+    res.status(response.status).json(data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
