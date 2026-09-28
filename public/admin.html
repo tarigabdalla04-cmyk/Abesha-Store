@@ -255,31 +255,52 @@ async function openProductOffers(productId, productType, productName) {
         name +
         "\n\nلم يتم العثور على عروض متاحة حاليًا."
       );
+
       document.getElementById("status").innerText = "";
       return;
     }
+
+    const USD_TO_SDG = 8050;
+    const MARKUP = 0.10;
 
     let message =
       "📦 " +
       name +
       "\n\n" +
-      "العروض المتاحة:\n\n";
+      "العروض والأسعار المقترحة:\n\n";
 
     offers.forEach((offer, index) => {
+      const usd = Number(
+        offer.price_usd || offer.price || 0
+      );
+
+      const cost = usd * USD_TO_SDG;
+      const sale = cost * (1 + MARKUP);
+      const profit = sale - cost;
+
       message +=
         (index + 1) +
         ". " +
         (offer.name || offer.title || offer.id || "عرض") +
         "\n" +
-        "السعر: $" +
-        (offer.price_usd || offer.price || "غير متوفر") +
-        "\n\n";
+        "التكلفة: " +
+        Math.round(cost).toLocaleString("en-US") +
+        " SDG\n" +
+        "سعر البيع المقترح: " +
+        Math.round(sale).toLocaleString("en-US") +
+        " SDG\n" +
+        "الربح: " +
+        Math.round(profit).toLocaleString("en-US") +
+        " SDG\n\n";
     });
 
     alert(message);
 
     document.getElementById("status").innerText =
-      "تم تحميل " + offers.length + " عرضًا لـ " + name;
+      "تم تحميل " +
+      offers.length +
+      " عرضًا لـ " +
+      name;
 
   } catch (error) {
     console.error(error);
