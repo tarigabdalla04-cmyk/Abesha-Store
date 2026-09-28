@@ -213,7 +213,86 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 }
+async function openProductOffers(productId, productType, productName) {
+  try {
+    const name = productName || productId;
 
+    document.getElementById("status").innerText =
+      "جاري تحميل عروض " + name + "...";
+
+    let url = "";
+
+    if (
+      String(productType || "").toLowerCase().includes("gift")
+    ) {
+      url =
+        "/api/fazer/giftcards/cards?category_id=" +
+        encodeURIComponent(productId);
+    } else {
+      url =
+        "/api/fazer/topups/offers?category_id=" +
+        encodeURIComponent(productId);
+    }
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    if (!response.ok || data.ok === false) {
+      throw new Error(
+        data.error || data.message || "تعذر تحميل العروض"
+      );
+    }
+
+    const offers =
+      data.offers ||
+      data.cards ||
+      data.items ||
+      [];
+
+    if (!offers.length) {
+      alert(
+        "المنتج: " +
+        name +
+        "\n\nلم يتم العثور على عروض متاحة حاليًا."
+      );
+      document.getElementById("status").innerText = "";
+      return;
+    }
+
+    let message =
+      "📦 " +
+      name +
+      "\n\n" +
+      "العروض المتاحة:\n\n";
+
+    offers.forEach((offer, index) => {
+      message +=
+        (index + 1) +
+        ". " +
+        (offer.name || offer.title || offer.id || "عرض") +
+        "\n" +
+        "السعر: $" +
+        (offer.price_usd || offer.price || "غير متوفر") +
+        "\n\n";
+    });
+
+    alert(message);
+
+    document.getElementById("status").innerText =
+      "تم تحميل " + offers.length + " عرضًا لـ " + name;
+
+  } catch (error) {
+    console.error(error);
+
+    alert(
+      "حدث خطأ أثناء تحميل العروض:\n\n" +
+      error.message
+    );
+
+    document.getElementById("status").innerText =
+      "تعذر تحميل العروض";
+  }
+}
 </script>
 
 </body>
