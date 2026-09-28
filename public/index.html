@@ -447,6 +447,40 @@
       `;
     }
   }
+function openPubgValidation() {
+  const playerId = prompt("أدخل PUBG Player ID للاختبار:");
+
+  if (!playerId) return;
+
+  fetch("/api/fazer/topups/validate-id", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      category_id: "pubg_mobile",
+      fields: {
+        player_id: playerId.trim()
+      }
+    })
+  })
+    .then(response => response.json())
+    .then(data => {
+      if (data.valid) {
+        alert(
+          "تم التحقق بنجاح ✅\n\n" +
+          "اسم اللاعب: " +
+          (data.player_name || "غير متوفر")
+        );
+      } else {
+        alert("لم يتم التحقق من Player ID ❌");
+      }
+    })
+    .catch(error => {
+      alert("حدث خطأ في الاتصال: " + error.message);
+    });
+}
+openPubgValidation();
 
   searchBox.addEventListener("input", render);
 
