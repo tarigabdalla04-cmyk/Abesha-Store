@@ -430,6 +430,38 @@ app.get("/api/products", async (req, res) => {
     });
   }
 });
+// التحقق من PUBG Player ID عبر Fazer
+app.post("/api/fazer/topups/validate-id", async (req, res) => {
+  try {
+    const { category_id, fields } = req.body;
+
+    const response = await fetch(
+      `${FAZER_API}/topups/validate-id`,
+      {
+        method: "POST",
+        headers: {
+          "X-API-Key": process.env.FAZER_API_KEY,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          category_id,
+          fields
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    res.status(response.status).json(data);
+
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
