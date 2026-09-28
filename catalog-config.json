@@ -4,6 +4,16 @@
   "pricing": {
     "usdToSdg": 8300,
     "referenceUsdToSdg": 8275,
-    "markup": 0.10
+    "markup": 0.10,
+    "finalPrices": {
+      "pubg_mobile_auto": {
+        "60_uc": 7950,
+        "325_uc": 40000,
+        "660_uc": 80000,
+        "1800_uc": 200000,
+        "3850_uc": 400000,
+        "8100_uc": 795000
+      }
+    }
   }
 }
