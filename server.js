@@ -716,7 +716,8 @@ app.get("/api/catalog/published", (req, res) => {
         : 0,
       published: Array.isArray(config.published)
         ? config.published
-        : []
+        : [],
+      pricing: config.pricing || {}
     });
 
   } catch (error) {
