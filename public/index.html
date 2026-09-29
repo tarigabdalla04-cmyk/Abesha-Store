@@ -393,20 +393,22 @@
           </div>
 
           <button
-            class="buy"
-            onclick="addToCart(${index})"
-          >
-            أضف للسلة
-          ${price ? (
-  typeof price === "number"
-    ? `<span dir="ltr">${price.toLocaleString()} SDG</span>`
-    : price
-        .split("<br>")
-        .map(line => `<div dir="ltr" style="direction:ltr; text-align:center;">${line}</div>`)
-        .join("")
-) : "السعر قريباً"}
-  ? `<span dir="ltr">${price.toLocaleString()} SDG</span>`
-  : `<div dir="ltr" style="line-height:1.8">${price}</div>`
+          <div class="price">
+  ${price ? (
+    typeof price === "number"
+      ? '<span dir="ltr">' + price.toLocaleString() + ' SDG</span>'
+      : price.split("<br>").map(line =>
+          '<div dir="ltr" style="direction:ltr;text-align:center;">' + line + '</div>'
+        ).join("")
+  ) : "السعر قريباً"}
+</div>
+
+<button
+  class="buy"
+  onclick="addToCart(${index})"
+>
+  أضف للسلة
+</button> 
 ) : "السعر قريباً"}
         </div>
       `;
