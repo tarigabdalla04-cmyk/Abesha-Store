@@ -427,11 +427,20 @@
 
   async function loadCatalog() {
     try {
-      const response = await fetch("/api/fazer/topups");
+      let cartItems = [];
+let cartCount = 0;
 
-      if (!response.ok) {
-        throw new Error("Catalog request failed");
-      }
+function addToCart(item) {
+  if (!item || typeof item !== "object") {
+    alert("لم يتم تحديد المنتج");
+    return;
+  }
+
+  cartItems.push(item);
+  cartCount = cartItems.length;
+
+  document.getElementById("cartCount").textContent = cartCount;
+}
 
       const data = await response.json();
       products = data.items || [];
