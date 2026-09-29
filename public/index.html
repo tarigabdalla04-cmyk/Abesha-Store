@@ -366,24 +366,16 @@
       const usd = getUSD(p);
       const price = (() => {
   const productId = p.id || p.category_id || p.slug || "";
-  const qtyMatch = name.match(/\b(8100|3850|1800|660|325|60)\b/);
-  const qty = qtyMatch ? qtyMatch[1] : null;
 
-  const finalPrices = {
-    "pubg_mobile_auto": {
-      "60_uc": 7950,
-      "325_uc": 40000,
-      "660_uc": 80000
-    },
-    "pubg_mobile_fast": {
-      "1800_uc": 200000,
-      "3850_uc": 400000
-    }
-  };
+  if (productId === "pubg_mobile_auto") {
+    return "60 UC: 7,950 SDG<br>325 UC: 40,000 SDG<br>660 UC: 80,000 SDG";
+  }
 
-  const override = finalPrices[productId]?.[`${qty}_uc`];
+  if (productId === "pubg_mobile_fast") {
+    return "1800 UC: 200,000 SDG<br>3850 UC: 400,000 SDG";
+  }
 
-  return override || salePrice(usd);
+  return salePrice(usd);
 })();
 
       return `
@@ -405,7 +397,7 @@
             onclick="addToCart(${index})"
           >
             أضف للسلة
-          </button>
+          ${price ? (typeof price === "number" ? price.toLocaleString() + " SDG" : price) : "السعر قريباً"}
         </div>
       `;
     }).join("");
