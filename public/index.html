@@ -364,7 +364,27 @@
     productsBox.innerHTML = filtered.map((p, index) => {
       const name = getName(p);
       const usd = getUSD(p);
-      const price = salePrice(usd);
+      const price = (() => {
+  const productId = p.id || p.category_id || p.slug || "";
+  const qtyMatch = name.match(/\b(8100|3850|1800|660|325|60)\b/);
+  const qty = qtyMatch ? qtyMatch[1] : null;
+
+  const finalPrices = {
+    "pubg_mobile_auto": {
+      "60_uc": 7950,
+      "325_uc": 40000,
+      "660_uc": 80000
+    },
+    "pubg_mobile_fast": {
+      "1800_uc": 200000,
+      "3850_uc": 400000
+    }
+  };
+
+  const override = finalPrices[productId]?.[`${qty}_uc`];
+
+  return override || salePrice(usd);
+})();
 
       return `
         <div class="product">
