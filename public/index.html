@@ -447,7 +447,7 @@ window.addToCart = function(item) {
 }
 
       const data = await response.json();
-      products = data.items || [];
+      products = extractProducts(data);
 
       if (!products.length) {
         statusBox.textContent = "الكتالوج متصل";
