@@ -407,16 +407,24 @@
   ) : "السعر قريباً"}
 </div>
 
-${
-  productId === "pubg_mobile_auto"
-    ? '<button class="buy" onclick=\'addToCart({productId:"pubg_mobile_auto", quantity:60, price:7950, name:"PUBG Mobile - 60 UC"})\'>60 UC — 7,950 SDG</button>' +
-      '<button class="buy" onclick=\'addToCart({productId:"pubg_mobile_auto", quantity:325, price:40000, name:"PUBG Mobile - 325 UC"})\'>325 UC — 40,000 SDG</button>' +
-      '<button class="buy" onclick=\'addToCart({productId:"pubg_mobile_auto", quantity:660, price:80000, name:"PUBG Mobile - 660 UC"})\'>660 UC — 80,000 SDG</button>'
-    : productId === "pubg_mobile_fast"
-      ? '<button class="buy" onclick=\'addToCart({productId:"pubg_mobile_fast", quantity:1800, price:200000, name:"PUBG Mobile - 1800 UC"})\'>1800 UC — 200,000 SDG</button>' +
-        '<button class="buy" onclick=\'addToCart({productId:"pubg_mobile_fast", quantity:3850, price:400000, name:"PUBG Mobile - 3850 UC"})\'>3850 UC — 400,000 SDG</button>'
-      : '<button class="buy" onclick="addToCart({productId: productId, name: name, price: price})">أضف للسلة</button>'
-}
+${(() => {
+  if (productId === "pubg_mobile_auto") {
+    return `
+      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:60, price:7950, name:'PUBG Mobile 60 UC'})">أضف للسلة</button>
+      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:325, price:40000, name:'PUBG Mobile 325 UC'})">أضف للسلة</button>
+      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:660, price:80000, name:'PUBG Mobile 660 UC'})">أضف للسلة</button>
+    `;
+  }
+
+  if (productId === "pubg_mobile_fast") {
+    return `
+      <button class="buy" onclick="addToCart({productId:'pubg_mobile_fast', quantity:1800, price:200000, name:'PUBG Mobile 1800 UC'})">أضف للسلة</button>
+      <button class="buy" onclick="addToCart({productId:'pubg_mobile_fast', quantity:3850, price:400000, name:'PUBG Mobile 3850 UC'})">أضف للسلة</button>
+    `;
+  }
+
+  return '<button class="buy" onclick="addToCart({productId: productId, name: name, price: price})">أضف للسلة</button>';
+})()}
 
      
   }
