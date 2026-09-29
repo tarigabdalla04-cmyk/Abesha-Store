@@ -429,6 +429,10 @@ ${
 
   async function loadCatalog() {
     try {
+    const response = await fetch("/api/fazer/topups");
+if (!response.ok) {
+  throw new Error("فشل طلب الكتالوج");
+}
       let cartItems = [];
 let cartCount = 0;
 
