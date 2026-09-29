@@ -389,11 +389,6 @@
           </div>
 
           <div class="price">
-            ${price ? price.toLocaleString() + " SDG" : "السعر قريبًا"}
-          </div>
-
-          <button
-          <div class="price">
   ${price ? (
     typeof price === "number"
       ? '<span dir="ltr">' + price.toLocaleString() + ' SDG</span>'
@@ -408,8 +403,7 @@
   onclick="addToCart(${index})"
 >
   أضف للسلة
-</button> 
-) : "السعر قريباً"}
+</button>
         </div>
       `;
     }).join("");
