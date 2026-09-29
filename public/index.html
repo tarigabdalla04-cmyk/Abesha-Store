@@ -432,7 +432,7 @@ ${
       let cartItems = [];
 let cartCount = 0;
 
-function addToCart(item) {
+window.addToCart = function(item) {
   if (!item || typeof item !== "object") {
     alert("لم يتم تحديد المنتج");
     return;
