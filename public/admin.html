@@ -303,10 +303,17 @@ if (productType === "topup" && pricing.finalPrices) {
 
     const priceKeys = Object.keys(productPrices);
 
-    const matchedKey = priceKeys.find(key => {
-      const quantity = key.replace("_uc", "").replace(/_/g, " ");
-      return offerText.includes(quantity);
-    });
+    const matchedKey = priceKeys
+  .sort((a, b) => {
+    const aNum = Number(a.replace("_uc", ""));
+    const bNum = Number(b.replace("_uc", ""));
+    return bNum - aNum;
+  })
+  .find(key => {
+    const quantity = key.replace("_uc", "");
+    const pattern = new RegExp(`\\b${quantity}\\b`);
+    return pattern.test(offerText);
+  });
 
     if (matchedKey) {
       sale = Number(productPrices[matchedKey]);
