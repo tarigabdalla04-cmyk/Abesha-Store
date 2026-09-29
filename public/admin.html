@@ -289,8 +289,8 @@ const cost = usd * USD_TO_SDG;
 let sale = null;
 
 // استخدام السعر النهائي المحدد للمنتج إذا كان موجوداً
-if (product.type === "topup" && pricing.finalPrices) {
-  const productPrices = pricing.finalPrices[product.id];
+if (productType === "topup" && pricing.finalPrices) {
+  const productPrices = pricing.finalPrices[productId];
 
   if (productPrices) {
     const offerText = String(
