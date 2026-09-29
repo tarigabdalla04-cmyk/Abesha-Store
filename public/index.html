@@ -538,7 +538,7 @@ openPubgValidation();
     });
   });
 
-  statusBox.textContent = "بدأ تشغيل الكتالوج";
+  document.body.insertAdjacentHTML("afterbegin", "<div style='position:fixed;top:0;left:0;right:0;background:red;color:white;padding:20px;z-index:99999;text-align:center;'>TEST OK</div>");
 loadCatalog();
 </script>
 
