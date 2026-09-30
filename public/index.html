@@ -4,235 +4,62 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ABESHA STORE | متجر أبيشا</title>
-
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    body {
-      font-family: Arial, Tahoma, sans-serif;
-      background: #f4f7fb;
-      color: #172033;
-    }
-
-    header {
-      background: linear-gradient(135deg, #084fa8, #062f68);
-      color: white;
-      padding: 18px 16px 22px;
-      border-radius: 0 0 22px 22px;
-    }
-
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-
-    .logo {
-      font-size: 24px;
-      font-weight: 800;
-    }
-
-    .cart {
-      background: rgba(255,255,255,.15);
-      border: 1px solid rgba(255,255,255,.25);
-      padding: 9px 13px;
-      border-radius: 12px;
-    }
-
-    .hero {
-      margin-top: 18px;
-    }
-
-    .hero h1 {
-      font-size: 24px;
-      margin-bottom: 7px;
-    }
-
-    .hero p {
-      opacity: .9;
-      line-height: 1.7;
-      font-size: 14px;
-    }
-
-    .search {
-      margin-top: 16px;
-      background: white;
-      border-radius: 14px;
-      padding: 13px 15px;
-      color: #555;
-      width: 100%;
-      border: none;
-      outline: none;
-      font-size: 15px;
-    }
-
-    main {
-      max-width: 900px;
-      margin: auto;
-      padding: 18px 14px 40px;
-    }
-
-    .section-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin: 5px 0 14px;
-    }
-
-    .section-title h2 {
-      font-size: 19px;
-    }
-
-    .status {
-      font-size: 12px;
-      color: #687386;
-    }
-
-    .categories {
-      display: flex;
-      gap: 9px;
-      overflow-x: auto;
-      padding-bottom: 12px;
-    }
-
-    .category {
-      flex: 0 0 auto;
-      background: white;
-      border: 1px solid #dce4ef;
-      padding: 9px 14px;
-      border-radius: 20px;
-      font-size: 13px;
-      cursor: pointer;
-    }
-
-    .category.active {
-      background: #084fa8;
-      color: white;
-      border-color: #084fa8;
-    }
-
-    .products {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
-    }
-
-    .product {
-      background: white;
-      border-radius: 16px;
-      padding: 14px;
-      border: 1px solid #e2e8f0;
-      box-shadow: 0 3px 12px rgba(0,0,0,.04);
-    }
-
-    .icon {
-      width: 46px;
-      height: 46px;
-      border-radius: 12px;
-      background: #eaf2ff;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 22px;
-      margin-bottom: 10px;
-    }
-
-    .product h3 {
-      font-size: 15px;
-      margin-bottom: 7px;
-      line-height: 1.4;
-    }
-
-    .product .type {
-      color: #758197;
-      font-size: 12px;
-      margin-bottom: 10px;
-    }
-
-    .price {
-      font-weight: 800;
-      color: #084fa8;
-      font-size: 16px;
-    }
-
-    .buy {
-      width: 100%;
-      border: none;
-      background: #084fa8;
-      color: white;
-      padding: 10px;
-      border-radius: 10px;
-      margin-top: 11px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    .empty {
-      background: white;
-      padding: 25px 15px;
-      text-align: center;
-      border-radius: 16px;
-      color: #697589;
-      line-height: 1.8;
-      grid-column: 1 / -1;
-    }
-
-    footer {
-      text-align: center;
-      color: #8a94a6;
-      font-size: 12px;
-      padding: 20px;
-    }
-
-    @media (min-width: 700px) {
-      .products {
-        grid-template-columns: repeat(3, 1fr);
-      }
-    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,Tahoma,sans-serif;background:#f4f7fb;color:#172033}
+    header{background:linear-gradient(135deg,#084fa8,#062f68);color:#fff;padding:18px 16px 22px;border-radius:0 0 22px 22px}
+    .top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .logo{font-size:24px;font-weight:800}
+    .cart{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);padding:9px 13px;border-radius:12px;color:#fff;cursor:pointer}
+    .hero{margin-top:18px}.hero h1{font-size:24px;margin-bottom:7px}.hero p{opacity:.9;line-height:1.7;font-size:14px}
+    .search{margin-top:16px;background:#fff;border-radius:14px;padding:13px 15px;color:#555;width:100%;border:none;outline:none;font-size:15px}
+    main{max-width:900px;margin:auto;padding:18px 14px 40px}
+    .section-title{display:flex;justify-content:space-between;align-items:center;margin:5px 0 14px}
+    .section-title h2{font-size:19px}.status{font-size:12px;color:#687386}
+    .categories{display:flex;gap:9px;overflow-x:auto;padding-bottom:12px}
+    .category{flex:0 0 auto;background:#fff;border:1px solid #dce4ef;padding:9px 14px;border-radius:20px;font-size:13px;cursor:pointer}
+    .category.active{background:#084fa8;color:#fff;border-color:#084fa8}
+    .products{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+    .product{background:#fff;border-radius:16px;padding:14px;border:1px solid #e2e8f0;box-shadow:0 3px 12px rgba(0,0,0,.04)}
+    .icon{width:46px;height:46px;border-radius:12px;background:#eaf2ff;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:10px}
+    .product h3{font-size:15px;margin-bottom:7px;line-height:1.4}.product .type{color:#758197;font-size:12px;margin-bottom:10px}
+    .price{font-weight:800;color:#084fa8;font-size:16px;line-height:1.7}
+    .offer-list{display:grid;gap:6px}.offer{display:flex;justify-content:space-between;gap:8px;direction:ltr;font-size:14px}.offer strong{white-space:nowrap}
+    .buy{width:100%;border:none;background:#084fa8;color:#fff;padding:10px;border-radius:10px;margin-top:11px;font-weight:bold;cursor:pointer}
+    .empty{background:#fff;padding:25px 15px;text-align:center;border-radius:16px;color:#697589;line-height:1.8;grid-column:1/-1}
+    .cart-panel{position:fixed;inset:auto 12px 12px 12px;background:#fff;border:1px solid #dce4ef;border-radius:16px;padding:14px;box-shadow:0 8px 30px rgba(0,0,0,.15);z-index:20;display:none}
+    .cart-panel.open{display:block}.cart-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+    .cart-items{max-height:220px;overflow:auto}.cart-item{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid #edf1f6;font-size:13px}
+    .cart-item button,.cart-head button{border:1px solid #dce4ef;background:#fff;border-radius:8px;padding:4px 7px;cursor:pointer}
+    .cart-actions{display:flex;gap:8px;margin-top:12px}.cart-actions button{flex:1;padding:10px;border-radius:10px;border:1px solid #dce4ef;background:#fff;cursor:pointer}
+    footer{text-align:center;color:#8a94a6;font-size:12px;padding:20px}
+    @media (min-width:700px){.products{grid-template-columns:repeat(3,1fr)}.cart-panel{right:auto;width:420px}}
   </style>
 </head>
-
 <body>
 
 <header>
   <div class="top">
     <div class="logo">ABESHA STORE</div>
-    <div class="cart">🛒 السلة <span id="cartCount">0</span></div>
+    <button class="cart" id="cartButton" type="button">🛒 السلة <span id="cartCount">0</span></button>
   </div>
-
   <div class="hero">
     <h1>متجر أبيشا للمنتجات الرقمية</h1>
-    <p>
-      ألعاب، بطاقات، اشتراكات ومنتجات رقمية متنوعة
-    </p>
+    <p>ألعاب، بطاقات، اشتراكات ومنتجات رقمية متنوعة</p>
   </div>
-
-  <input
-    id="search"
-    class="search"
-    type="search"
-    placeholder="ابحث عن منتج..."
-  >
+  <input id="search" class="search" type="search" placeholder="ابحث عن منتج...">
 </header>
 
 <main>
-
-  <div class="section-title">
-    <h2>التصنيفات</h2>
-  </div>
+  <div class="section-title"><h2>التصنيفات</h2></div>
 
   <div class="categories">
-    <button class="category active" data-cat="all">الكل</button>
-    <button class="category" data-cat="game">الألعاب</button>
-    <button class="category" data-cat="gift">بطاقات الهدايا</button>
-    <button class="category" data-cat="subscription">الاشتراكات</button>
-    <button class="category" data-cat="steam">Steam</button>
-    <button class="category" data-cat="mobile">شحن الألعاب</button>
+    <button class="category active" data-cat="all" type="button">الكل</button>
+    <button class="category" data-cat="game" type="button">الألعاب</button>
+    <button class="category" data-cat="gift" type="button">بطاقات الهدايا</button>
+    <button class="category" data-cat="subscription" type="button">الاشتراكات</button>
+    <button class="category" data-cat="steam" type="button">Steam</button>
+    <button class="category" data-cat="mobile" type="button">شحن الألعاب</button>
   </div>
 
   <div class="section-title">
@@ -241,57 +68,87 @@
   </div>
 
   <div id="products" class="products">
-    <div class="empty">
-      جاري تحميل المنتجات...
-    </div>
+    <div class="empty">جاري تحميل المنتجات...</div>
   </div>
-
 </main>
 
-<footer>
-  © 2026 ABESHA STORE — جميع الحقوق محفوظة
-</footer>
+<div id="cartPanel" class="cart-panel" aria-hidden="true">
+  <div class="cart-head">
+    <strong>سلة المشتريات</strong>
+    <button id="closeCart" type="button">✕</button>
+  </div>
+  <div id="cartItems" class="cart-items"></div>
+  <div class="cart-actions">
+    <button id="clearCart" type="button">تفريغ السلة</button>
+    <button id="checkoutButton" type="button">متابعة لاحقًا</button>
+  </div>
+</div>
+
+<footer>© 2026 ABESHA STORE — جميع الحقوق محفوظة</footer>
 
 <script>
+(() => {
+  "use strict";
+
   const USD_TO_SDG = 8050;
   const MARKUP = 0.10;
 
+  const FINAL_PRICES = {
+    pubg_mobile_auto: {
+      "60": 7950,
+      "325": 40000,
+      "660": 80000
+    },
+    pubg_mobile_fast: {
+      "1800": 200000,
+      "3850": 400000
+    },
+    pubg_mobile_manual: {
+      "1800": 200000,
+      "3850": 400000
+    }
+  };
+
   let products = [];
   let selectedCategory = "all";
+  let cartItems = [];
 
   const productsBox = document.getElementById("products");
   const statusBox = document.getElementById("status");
   const searchBox = document.getElementById("search");
+  const cartCountBox = document.getElementById("cartCount");
+  const cartPanel = document.getElementById("cartPanel");
+  const cartItemsBox = document.getElementById("cartItems");
+
+  function escapeHTML(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 
   function getArray(data) {
     if (Array.isArray(data)) return data;
-
     if (Array.isArray(data.products)) return data.products;
     if (Array.isArray(data.catalog)) return data.catalog;
     if (Array.isArray(data.data)) return data.data;
-    if (data.data && Array.isArray(data.data.products)) {
-      return data.data.products;
-    }
-
+    if (data.data && Array.isArray(data.data.products)) return data.data.products;
+    if (Array.isArray(data.items)) return data.items;
     return [];
   }
 
   function getName(p) {
-    return p.name ||
-           p.title ||
-           p.product_name ||
-           p.productName ||
-           "منتج رقمي";
+    return p.name || p.title || p.product_name || p.productName || "منتج رقمي";
+  }
+
+  function getProductId(p) {
+    return String(p.id || p.category_id || p.slug || "");
   }
 
   function getUSD(p) {
-    return Number(
-      p.price_usd ??
-      p.priceUSD ??
-      p.price ??
-      p.cost ??
-      0
-    );
+    return Number(p.price_usd ?? p.priceUSD ?? p.price ?? p.cost ?? 0);
   }
 
   function getCategory(p) {
@@ -302,6 +159,7 @@
     ).toLowerCase();
 
     if (text.includes("steam")) return "steam";
+
     if (
       text.includes("gift") ||
       text.includes("google") ||
@@ -327,7 +185,7 @@
   }
 
   function salePrice(usd) {
-    if (!usd) return null;
+    if (!usd || usd <= 0) return null;
 
     const cost = usd * USD_TO_SDG;
     const sale = cost * (1 + MARKUP);
@@ -335,213 +193,283 @@
     return Math.ceil(sale / 100) * 100;
   }
 
+  function getQuantity(p) {
+    const text = getName(p);
+    const match = text.match(
+      /\b(8100|6000|3850|3000|1800|1500|660|600|325|300|170|60)\b/i
+    );
+
+    return match ? match[1] : null;
+  }
+
+  function getFinalPrice(p) {
+    const productId = getProductId(p);
+    const quantity = getQuantity(p);
+    const override = FINAL_PRICES[productId]?.[quantity];
+
+    return override || salePrice(getUSD(p));
+  }
+
+  function getPubgOffers(p) {
+    const id = getProductId(p);
+
+    if (id === "pubg_mobile_auto") {
+      return [
+        { quantity: 60, price: 7950 },
+        { quantity: 325, price: 40000 },
+        { quantity: 660, price: 80000 }
+      ];
+    }
+
+    if (id === "pubg_mobile_fast" || id === "pubg_mobile_manual") {
+      return [
+        { quantity: 1800, price: 200000 },
+        { quantity: 3850, price: 400000 }
+      ];
+    }
+
+    return [];
+  }
+
+  function addToCart(item) {
+    if (!item || !item.productId) return;
+
+    cartItems.push(item);
+    updateCart();
+  }
+
+  window.addToCart = addToCart;
+
+  window.removeFromCart = function(index) {
+    cartItems.splice(index, 1);
+    updateCart();
+  };
+
+  function updateCart() {
+    cartCountBox.textContent = cartItems.length;
+
+    if (!cartItems.length) {
+      cartItemsBox.innerHTML =
+        '<div class="empty">السلة فارغة حاليًا.</div>';
+      return;
+    }
+
+    cartItemsBox.innerHTML = cartItems.map((item, index) => `
+      <div class="cart-item">
+        <span>${escapeHTML(item.name)}</span>
+        <strong dir="ltr">${Number(item.price).toLocaleString()} SDG</strong>
+        <button type="button" onclick="removeFromCart(${index})">حذف</button>
+      </div>
+    `).join("");
+  }
+
+  function renderProduct(p) {
+    const name = getName(p);
+    const productId = getProductId(p);
+    const category = p.category || p.type || "منتج رقمي";
+    const offers = getPubgOffers(p);
+
+    let priceHTML = "";
+    let buttonsHTML = "";
+
+    if (offers.length) {
+      priceHTML = `
+        <div class="offer-list">
+          ${offers.map(offer => `
+            <div class="offer">
+              <span>${offer.quantity} UC</span>
+              <strong>${offer.price.toLocaleString()} SDG</strong>
+            </div>
+          `).join("")}
+        </div>
+      `;
+
+      buttonsHTML = offers.map(offer => `
+        <button
+          class="buy"
+          type="button"
+          data-product-id="${escapeHTML(productId)}"
+          data-quantity="${offer.quantity}"
+          data-price="${offer.price}">
+          أضف للسلة
+        </button>
+      `).join("");
+    } else {
+      const price = getFinalPrice(p);
+
+      priceHTML = price
+        ? `<span dir="ltr">${price.toLocaleString()} SDG</span>`
+        : "السعر قريبًا";
+
+      buttonsHTML = `
+        <button
+          class="buy"
+          type="button"
+          data-product-id="${escapeHTML(productId)}"
+          data-price="${price || 0}"
+          data-name="${escapeHTML(name)}">
+          أضف للسلة
+        </button>
+      `;
+    }
+
+    return `
+      <div class="product">
+        <div class="icon">🎮</div>
+        <h3>${escapeHTML(name)}</h3>
+        <div class="type">${escapeHTML(category)}</div>
+        <div class="price">${priceHTML}</div>
+        ${buttonsHTML}
+      </div>
+    `;
+  }
+
+  function attachBuyHandlers() {
+    productsBox.querySelectorAll(".buy").forEach(button => {
+      button.addEventListener("click", () => {
+        const productId = button.dataset.productId;
+        const quantity = button.dataset.quantity || null;
+        const price = Number(button.dataset.price || 0);
+        const name =
+          button.dataset.name ||
+          ("PUBG Mobile " + quantity + " UC");
+
+        addToCart({
+          productId,
+          quantity,
+          price,
+          name
+        });
+      });
+    });
+  }
+
   function render() {
     const search = searchBox.value.trim().toLowerCase();
 
     const filtered = products.filter(p => {
       const name = getName(p).toLowerCase();
-      const cat = getCategory(p);
+      const category = getCategory(p);
 
       const matchesSearch =
         !search || name.includes(search);
 
       const matchesCategory =
         selectedCategory === "all" ||
-        cat === selectedCategory;
+        category === selectedCategory;
 
       return matchesSearch && matchesCategory;
     });
 
     if (!filtered.length) {
-      productsBox.innerHTML = `
-        <div class="empty">
-          لا توجد منتجات مطابقة حاليًا.
-        </div>
-      `;
+      productsBox.innerHTML =
+        '<div class="empty">لا توجد منتجات مطابقة حاليًا.</div>';
       return;
     }
 
-    productsBox.innerHTML = filtered.map((p, index) => {
-      const name = getName(p);
-      const usd = getUSD(p);
-      const price = (() => {
-  const productId = p.id || p.category_id || p.slug || "";
+    productsBox.innerHTML =
+      filtered.map(renderProduct).join("");
 
-  if (productId === "pubg_mobile_auto") {
-    return "60 UC: 7,950 SDG<br>325 UC: 40,000 SDG<br>660 UC: 80,000 SDG";
+    attachBuyHandlers();
   }
-
-  if (productId === "pubg_mobile_fast") {
-    return "1800 UC: 200,000 SDG<br>3850 UC: 400,000 SDG";
-  }
-
-  return salePrice(usd);
-})();
-
-      return `
-        <div class="product">
-          <div class="icon">🎮</div>
-
-          <h3>${escapeHTML(name)}</h3>
-
-          <div class="type">
-            ${escapeHTML(p.category || p.type || "منتج رقمي")}
-          </div>
-
-          <div class="price">
-  ${price ? (
-    typeof price === "number"
-      ? '<span dir="ltr">' + price.toLocaleString() + ' SDG</span>'
-      : price.split("<br>").map(line =>
-          '<div dir="ltr" style="direction:ltr;text-align:center;">' + line + '</div>'
-        ).join("")
-  ) : "السعر قريباً"}
-</div>
-<div class="price">
-  ${price ? (
-    typeof price === "number"
-      ? '<span dir="ltr">' + price.toLocaleString() + ' SDG</span>'
-      : price.split("<br>").map(line =>
-          '<div dir="ltr" style="direction:ltr;text-align:center;">' + line + '</div>'
-        ).join("")
-  ) : "السعر قريباً"}
-</div>
-
-${(() => {
-  if (productId === "pubg_mobile_auto") {
-    return `
-      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:60, price:7950, name:'PUBG Mobile 60 UC'})">أضف للسلة</button>
-      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:325, price:40000, name:'PUBG Mobile 325 UC'})">أضف للسلة</button>
-      <button class="buy" onclick="addToCart({productId:'pubg_mobile_auto', quantity:660, price:80000, name:'PUBG Mobile 660 UC'})">أضف للسلة</button>
-    `;
-  }
-
-  if (productId === "pubg_mobile_fast") {
-    return `
-      <button class="buy" onclick="addToCart({productId:'pubg_mobile_fast', quantity:1800, price:200000, name:'PUBG Mobile 1800 UC'})">أضف للسلة</button>
-      <button class="buy" onclick="addToCart({productId:'pubg_mobile_fast', quantity:3850, price:400000, name:'PUBG Mobile 3850 UC'})">أضف للسلة</button>
-    `;
-  }
-
-  return '<button class="buy" onclick="addToCart({productId: productId, name: name, price: price})">أضف للسلة</button>';
-})()}
-
-     
-  }
-
-  let cartCount = 0;
-
- 
 
   async function loadCatalog() {
+    statusBox.textContent = "جاري تحميل الكتالوج...";
+
     try {
-    const response = await fetch("/api/products");
-if (!response.ok) {
-  throw new Error("فشل طلب الكتالوج");
-}
-      let cartItems = [];
-let cartCount = 0;
+      const response = await fetch("/api/products", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json"
+        },
+        cache: "no-store"
+      });
 
-window.addToCart = function(item) {
-  if (!item || typeof item !== "object") {
-    alert("لم يتم تحديد المنتج");
-    return;
-  }
-
-  cartItems.push(item);
-  cartCount = cartItems.length;
-
-  document.getElementById("cartCount").textContent = cartCount;
-}
+      if (!response.ok) {
+        throw new Error(
+          "فشل طلب الكتالوج: HTTP " + response.status
+        );
+      }
 
       const data = await response.json();
-      products = extractProducts(data);
+
+      products = getArray(data);
 
       if (!products.length) {
-        statusBox.textContent = "الكتالوج متصل";
+        statusBox.textContent = "اتصال ناجح";
+
         productsBox.innerHTML = `
           <div class="empty">
-            تم الاتصال بمصدر المنتجات،
-            وسيتم عرض المنتجات بعد مزامنة الكتالوج.
+            تم الاتصال بالسيرفر، لكن لم تصل منتجات في الاستجابة الحالية.
           </div>
         `;
+
         return;
       }
 
       statusBox.textContent =
-        products.length + " منتج";
+        products.length.toLocaleString() + " منتج";
 
       render();
 
     } catch (error) {
-      console.error(error);
+      console.error("Catalog error:", error);
 
-      statusBox.textContent = "بانتظار الاتصال";
+      statusBox.textContent =
+        "تعذر تحميل الكتالوج";
 
       productsBox.innerHTML = `
         <div class="empty">
-          المتجر جاهز، لكن لم يتم تحميل الكتالوج حاليًا.<br>
-          سيتم تفعيل المنتجات بعد إعداد اتصال Fazer في السيرفر.
+          تعذر تحميل المنتجات حاليًا.<br>
+          تأكد من اتصال السيرفر ثم أعد المحاولة.
         </div>
       `;
     }
   }
-function openPubgValidation() {
-  const playerId = prompt("أدخل PUBG Player ID للاختبار:");
 
-  if (!playerId) return;
+  document.getElementById("cartButton").addEventListener("click", () => {
+    cartPanel.classList.toggle("open");
+    cartPanel.setAttribute(
+      "aria-hidden",
+      String(!cartPanel.classList.contains("open"))
+    );
+  });
 
-  fetch("/api/fazer/topups/validate-id", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      category_id: "pubg_mobile",
-      fields: {
-        player_id: playerId.trim()
-      }
-    })
-  })
-    .then(response => response.json())
-    .then(data => {
-      if (data.valid) {
-        alert(
-          "تم التحقق بنجاح ✅\n\n" +
-          "اسم اللاعب: " +
-          (data.player_name || "غير متوفر")
-        );
-      } else {
-        alert("لم يتم التحقق من Player ID ❌");
-      }
-    })
-    .catch(error => {
-      alert("حدث خطأ في الاتصال: " + error.message);
-    });
-}
-openPubgValidation();
+  document.getElementById("closeCart").addEventListener("click", () => {
+    cartPanel.classList.remove("open");
+    cartPanel.setAttribute("aria-hidden", "true");
+  });
+
+  document.getElementById("clearCart").addEventListener("click", () => {
+    cartItems = [];
+    updateCart();
+  });
+
+  document.getElementById("checkoutButton").addEventListener("click", () => {
+    alert(
+      "السلة تعمل حاليًا في وضع الاختبار. لن يتم تنفيذ أي طلب حقيقي."
+    );
+  });
 
   searchBox.addEventListener("input", render);
 
   document.querySelectorAll(".category").forEach(button => {
     button.addEventListener("click", () => {
-
-      document.querySelectorAll(".category")
+      document
+        .querySelectorAll(".category")
         .forEach(b => b.classList.remove("active"));
 
       button.classList.add("active");
-
-      selectedCategory =
-        button.dataset.cat;
+      selectedCategory = button.dataset.cat;
 
       render();
     });
   });
 
-  document.body.insertAdjacentHTML("afterbegin", "<div style='position:fixed;top:0;left:0;right:0;background:red;color:white;padding:20px;z-index:99999;text-align:center;'>TEST OK</div>");
-loadCatalog();
+  updateCart();
+  loadCatalog();
+})();
 </script>
 
 </body>
 </html>
-<!-- deploy-test -->
