@@ -773,6 +773,200 @@ app.get("/api/admin/catalog", requireAdmin, async (req, res) => {
     });
   }
 });
+// ===============================
+// نظام الطلبات الهجين - المرحلة الأولى
+// ===============================
+
+const orders = new Map();
+
+function generateOrderNumber() {
+  const part1 = Math.floor(100000 + Math.random() * 900000);
+  const part2 = Math.floor(100000 + Math.random() * 900000);
+
+  return `AB-${part1}-${part2}`;
+}
+
+// إنشاء طلب جديد
+app.post("/api/orders", (req, res) => {
+  try {
+    const {
+      customer,
+      items,
+      paymentMethod,
+      total
+    } = req.body;
+
+    if (!customer || typeof customer !== "object") {
+      return res.status(400).json({
+        ok: false,
+        error: "customer is required"
+      });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "items are required"
+      });
+    }
+
+    if (!paymentMethod) {
+      return res.status(400).json({
+        ok: false,
+        error: "paymentMethod is required"
+      });
+    }
+
+    const amount = Number(total);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid total"
+      });
+    }
+
+    const orderNumber = generateOrderNumber();
+
+    const order = {
+      orderNumber,
+
+      customer: {
+        name: String(customer.name || "").trim(),
+        phone: String(customer.phone || "").trim(),
+        email: String(customer.email || "").trim()
+      },
+
+      items: items.map(item => ({
+        productId: String(item.productId || ""),
+        name: String(item.name || ""),
+        quantity: item.quantity || "",
+        price: Number(item.price) || 0,
+        fields: item.fields || {}
+      })),
+
+      payment: {
+        method: String(paymentMethod),
+        status: "PENDING",
+        transactionId: null
+      },
+
+      total: amount,
+
+      status: "PAYMENT_PENDING",
+
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    orders.set(orderNumber, order);
+
+    console.log(
+      `[ORDER CREATED] ${orderNumber} - ${amount} SDG - ${paymentMethod}`
+    );
+
+    res.status(201).json({
+      ok: true,
+      order: {
+        orderNumber: order.orderNumber,
+        status: order.status,
+        total: order.total,
+        paymentMethod: order.payment.method,
+        createdAt: order.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error("Create order error:", error);
+
+    res.status(500).json({
+      ok: false,
+      error: "Failed to create order"
+    });
+  }
+});
+
+// الاستعلام عن طلب
+app.get("/api/orders/:orderNumber", (req, res) => {
+  const order = orders.get(req.params.orderNumber);
+
+  if (!order) {
+    return res.status(404).json({
+      ok: false,
+      error: "Order not found"
+    });
+  }
+
+  res.json({
+    ok: true,
+    order
+  });
+});
+
+// جلب الطلبات للوحة الإدارة
+app.get("/api/admin/orders", requireAdmin, (req, res) => {
+  const list = Array.from(orders.values())
+    .sort((a, b) => {
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+  res.json({
+    ok: true,
+    total: list.length,
+    orders: list
+  });
+});
+
+// تأكيد الدفع يدويًا - للاستخدام الإداري فقط
+app.post(
+  "/api/admin/orders/:orderNumber/confirm-payment",
+  requireAdmin,
+  (req, res) => {
+
+    const order = orders.get(req.params.orderNumber);
+
+    if (!order) {
+      return res.status(404).json({
+        ok: false,
+        error: "Order not found"
+      });
+    }
+
+    if (order.status !== "PAYMENT_PENDING") {
+      return res.status(409).json({
+        ok: false,
+        error: `Order cannot be confirmed from status ${order.status}`
+      });
+    }
+
+    const transactionId =
+      String(req.body?.transactionId || "").trim();
+
+    if (!transactionId) {
+      return res.status(400).json({
+        ok: false,
+        error: "transactionId is required"
+      });
+    }
+
+    order.payment.transactionId = transactionId;
+    order.payment.status = "CONFIRMED";
+
+    order.status = "PAYMENT_CONFIRMED";
+    order.updatedAt = new Date().toISOString();
+
+    orders.set(order.orderNumber, order);
+
+    console.log(
+      `[PAYMENT CONFIRMED] ${order.orderNumber} - ${transactionId}`
+    );
+
+    res.json({
+      ok: true,
+      order
+    });
+  }
+);
 app.listen(PORT, () => {
   console.log(`ABESHA STORE running on port ${PORT}`);
 });
