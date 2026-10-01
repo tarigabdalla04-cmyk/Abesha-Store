@@ -527,6 +527,7 @@ button{cursor:pointer}
 }
 
 .payment-option strong{display:block}
+
 .payment-option small{
   display:block;
   color:#8da6c1;
@@ -747,9 +748,6 @@ footer{
 
 </main>
 
-
-<!-- CART -->
-
 <div class="drawer-backdrop" id="drawerBackdrop"></div>
 
 <aside class="drawer" id="cartDrawer">
@@ -794,9 +792,6 @@ footer{
 
 </aside>
 
-
-<!-- ORDER MODAL -->
-
 <div class="modal" id="orderModal">
 
   <div class="modal-box">
@@ -826,15 +821,12 @@ footer{
 
 </div>
 
-
 <div class="toast" id="toast"></div>
-
 
 <script>
 (() => {
 
 "use strict";
-
 
 /* =========================
    PRICE OVERRIDES
@@ -861,8 +853,6 @@ const FINAL_PRICES = {
 
 };
 
-};
-
 
 /* =========================
    STATE
@@ -871,17 +861,11 @@ const FINAL_PRICES = {
 const state = {
 
   products:[],
-
   filtered:[],
-
   category:"all",
-
   search:"",
-
   cart:[],
-
   lang:"ar",
-
   checkoutStep:1,
 
   customer:{
@@ -919,7 +903,8 @@ function esc(v){
 
 function getArray(data){
 
-  if(Array.isArray(data)) return data;
+  if(Array.isArray(data))
+    return data;
 
   if(Array.isArray(data.products))
     return data.products;
@@ -1069,28 +1054,45 @@ function finalPrice(p){
          );
 
 }
-if(id === "pubg_mobile_auto"){
 
-  return [
-    {
-      qty:60,
-      price:7950
-    },
-    {
-      qty:325,
-      price:40000
-    },
-    {
-      qty:660,
-      price:80000
-    },
-    {
-      qty:8100,
-      price:800000
-    }
-  ];
 
-}
+/* =========================
+   PUBG OFFERS
+========================= */
+
+function pubgOffers(p){
+
+  const id = idOf(p);
+
+
+  if(id === "pubg_mobile_auto"){
+
+    return [
+
+      {
+        qty:60,
+        price:7950
+      },
+
+      {
+        qty:325,
+        price:40000
+      },
+
+      {
+        qty:660,
+        price:80000
+      },
+
+      {
+        qty:8100,
+        price:800000
+      }
+
+    ];
+
+  }
+
 
   if(
     id === "pubg_mobile_fast" ||
@@ -1098,17 +1100,21 @@ if(id === "pubg_mobile_auto"){
   ){
 
     return [
+
       {
         qty:1800,
         price:200000
       },
+
       {
         qty:3850,
         price:400000
       }
+
     ];
 
   }
+
 
   return [];
 
@@ -1193,6 +1199,7 @@ function updateCart(){
 
   $("cartCount").textContent =
     state.cart.length;
+
 
   if(!state.cart.length){
 
@@ -1444,6 +1451,7 @@ function renderProduct(p){
       </div>
 
       <div class="product-price">
+
         ${
           price
           ?
@@ -1451,6 +1459,7 @@ function renderProduct(p){
           :
           "السعر قريبًا"
         }
+
       </div>
 
       <button
@@ -2102,14 +2111,6 @@ function createTestOrder(){
   state.checkoutStep = 4;
 
   renderCheckoutStep();
-
-
-  /*
-    مهم:
-    لا يوجد fetch هنا.
-    لا يوجد POST إلى Fazer.
-    لا يوجد خصم أو تنفيذ حقيقي.
-  */
 
 }
 
