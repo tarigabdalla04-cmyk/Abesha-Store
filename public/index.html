@@ -842,8 +842,12 @@ footer{
 
 const FINAL_PRICES = {
 
-  pubg_mobile_auto:{60:7950,325:40000,660:80000,8100:800000},
-
+  pubg_mobile_auto:{
+    60:7950,
+    325:40000,
+    660:80000,
+    8100:800000
+  },
 
   pubg_mobile_fast:{
     1800:200000,
@@ -854,6 +858,8 @@ const FINAL_PRICES = {
     1800:200000,
     3850:400000
   }
+
+};
 
 };
 
@@ -1063,30 +1069,28 @@ function finalPrice(p){
          );
 
 }
+if(id === "pubg_mobile_auto"){
 
+  return [
+    {
+      qty:60,
+      price:7950
+    },
+    {
+      qty:325,
+      price:40000
+    },
+    {
+      qty:660,
+      price:80000
+    },
+    {
+      qty:8100,
+      price:800000
+    }
+  ];
 
-function pubgOffers(p){
-
-  const id = idOf(p);
-
-  if(id === "pubg_mobile_auto"){
-
-    return [
-      {
-        qty:60,
-        price:7950
-      },
-      {
-        qty:325,
-        price:40000
-      },
-      {
-        qty:660,
-        price:80000
-      }
-    ];
-
-  }
+}
 
   if(
     id === "pubg_mobile_fast" ||
