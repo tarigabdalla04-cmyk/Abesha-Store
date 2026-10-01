@@ -21,28 +21,38 @@ const PRICING_TIERS = [
 ];
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const PRICE_CACHE_VERSION = 6;
-
-const PRICE_CACHE_FILE =
-  path.join(__dirname, "pricing-cache.json");
-
-const STORE_SETTINGS_FILE =
-  path.join(__dirname, "store-settings.json");
-
-const ORDERS_FILE =
-  path.join(__dirname, "orders.json");
-
+const PRICE_CACHE_VERSION = 4;
+const PRICE_CACHE_FILE = path.join(__dirname, "pricing-cache.json");
+const STORE_SETTINGS_FILE = path.join(__dirname, "store-settings.json");
+const ORDERS_FILE = path.join(__dirname, "orders.json");
 const STORE_SETTINGS_VERSION = 1;
+
+const PRICE_OVERRIDES = {
+  pubg_mobile_auto: {
+    "60": 7950,
+    "325": 40000,
+    "660": 80000,
+    "8100": 800000
+  },
+  pubg_mobile_fast: {
+    "1800": 200000,
+    "3850": 400000
+  },
+  pubg_mobile_manual: {
+    "1800": 200000,
+    "3850": 400000
+  }
+};
 
 let pricedCatalogCache = null;
 let pricedCatalogBuiltAt = 0;
 let priceRefreshPromise = null;
 
 // ======================================================
-// Express
+// إعدادات Express
 // ======================================================
 
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 // ======================================================
@@ -51,9 +61,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 function requireFazerKey() {
   if (!process.env.FAZER_API_KEY) {
-    const error =
-      new Error("FAZER_API_KEY is not configured");
-
+    const error = new Error("FAZER_API_KEY is not configured");
     error.status = 500;
     throw error;
   }
@@ -67,240 +75,71 @@ function fazerHeaders(extra = {}) {
   };
 }
 
-function normalizeFazerEndpoint(endpoint) {
-  const value = String(endpoint || "").trim();
-
-  if (!value) {
-    return "";
-  }
-
-  return value.startsWith("/")
-    ? value
-    : `/${value}`;
-}
-
 async function fazerFetch(endpoint, options = {}) {
   requireFazerKey();
 
-  const controller =
-    new AbortController();
-
-  const timeoutMs =
-    Number(options.timeoutMs) > 0
-      ? Number(options.timeoutMs)
-      : 30000;
-
-  const timeout =
-    setTimeout(
-      () => controller.abort(),
-      timeoutMs
-    );
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs || 30000
+  );
 
   try {
-    const normalizedEndpoint =
-      normalizeFazerEndpoint(endpoint);
+    const response = await fetch(`${FAZER_API}${endpoint}`, {
+      ...options,
+      headers: {
+        ...fazerHeaders(options.headers || {})
+      },
+      signal: controller.signal
+    });
 
-    const url =
-      `${FAZER_API}${normalizedEndpoint}`;
+    const text = await response.text();
 
-    const requestOptions = {
-      ...options
-    };
-
-    delete requestOptions.timeoutMs;
-
-    const response =
-      await fetch(
-        url,
-        {
-          ...requestOptions,
-
-          headers:
-            fazerHeaders(
-              options.headers || {}
-            ),
-
-          signal:
-            controller.signal
-        }
-      );
-
-    const text =
-      await response.text();
-
-    let data = {};
-
+    let data;
     try {
-      data =
-        text
-          ? JSON.parse(text)
-          : {};
+      data = text ? JSON.parse(text) : {};
     } catch {
-      data = {
-        raw: text
-      };
+      data = { raw: text };
     }
 
     if (!response.ok) {
-      const error =
-        new Error(
-          data?.message ||
-          data?.error ||
-          `Fazer API HTTP ${response.status}`
-        );
-
-      error.status =
-        response.status;
-
-      error.data =
-        data;
-
+      const error = new Error(
+        data?.message ||
+        data?.error ||
+        `Fazer API HTTP ${response.status}`
+      );
+      error.status = response.status;
+      error.data = data;
       throw error;
     }
 
     return data;
-
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function fazerGet(
-  endpoint,
-  timeoutMs = 30000
-) {
-  return fazerFetch(
-    endpoint,
-    {
-      method: "GET",
-      timeoutMs
-    }
-  );
+async function fazerGet(endpoint, timeoutMs = 30000) {
+  return fazerFetch(endpoint, {
+    method: "GET",
+    timeoutMs
+  });
 }
 
-// ======================================================
-// قراءة Arrays من استجابات Fazer
-// ======================================================
-
-function getArray(
-  data,
-  keys = [
-    "items",
-    "offers",
-    "cards",
-    "keys"
-  ]
-) {
-  for (const key of keys) {
-    if (
-      Array.isArray(
-        data?.[key]
-      )
-    ) {
-      return data[key];
-    }
-  }
-
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  if (
-    Array.isArray(
-      data?.data
-    )
-  ) {
-    return data.data;
-  }
-
-  if (
-    Array.isArray(
-      data?.data?.items
-    )
-  ) {
-    return data.data.items;
-  }
-
-  if (
-    Array.isArray(
-      data?.data?.offers
-    )
-  ) {
-    return data.data.offers;
-  }
-
-  if (
-    Array.isArray(
-      data?.data?.cards
-    )
-  ) {
-    return data.data.cards;
-  }
-
-  if (
-    Array.isArray(
-      data?.data?.keys
-    )
-  ) {
-    return data.data.keys;
-  }
-
-  return [];
-}
-
-// ======================================================
-// Fazer — Pagination
-// ======================================================
-
-async function getAllCategories(
-  endpoint
-) {
+async function getAllCategories(endpoint) {
   const items = [];
-
   let cursor = null;
 
-  for (
-    let page = 0;
-    page < 100;
-    page++
-  ) {
-    const params =
-      new URLSearchParams();
+  for (let page = 0; page < 100; page++) {
+    const query = cursor
+      ? `?cursor=${encodeURIComponent(cursor)}`
+      : "";
 
-    params.set(
-      "limit",
-      "200"
-    );
-
-    if (cursor) {
-      params.set(
-        "cursor",
-        cursor
-      );
-    }
-
-    const data =
-      await fazerGet(
-        `${normalizeFazerEndpoint(
-          endpoint
-        )}?${params.toString()}`,
-        30000
-      );
-
-    const pageItems =
-      getArray(
-        data,
-        [
-          "items",
-          "categories",
-          "games"
-        ]
-      );
+    const data = await fazerGet(`${endpoint}${query}`);
+    const pageItems = getArray(data, ["items", "categories", "games"]);
 
     if (pageItems.length) {
-      items.push(
-        ...pageItems
-      );
+      items.push(...pageItems);
     }
 
     const nextCursor =
@@ -309,57 +148,60 @@ async function getAllCategories(
       data?.pagination?.next_cursor ||
       null;
 
-    const hasMore =
-      Boolean(
-        data?.meta?.has_more
-      );
-
-    if (
-      !nextCursor ||
-      !hasMore
-    ) {
+    if (!nextCursor) {
       break;
     }
 
-    if (
-      nextCursor === cursor
-    ) {
-      break;
-    }
-
-    cursor =
-      String(nextCursor);
+    cursor = nextCursor;
   }
 
   return items;
+}
+
+function getArray(data, keys = ["items", "offers", "cards"]) {
+  for (const key of keys) {
+    if (Array.isArray(data?.[key])) {
+      return data[key];
+    }
+  }
+
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.data?.items)) {
+    return data.data.items;
+  }
+
+  if (Array.isArray(data?.data?.offers)) {
+    return data.data.offers;
+  }
+
+  if (Array.isArray(data?.data?.cards)) {
+    return data.data.cards;
+  }
+
+  return [];
 }
 
 // ======================================================
 // التسعير
 // ======================================================
 
-function getMarkupForCost(
-  costSdg
-) {
-  const tier =
-    PRICING_TIERS.find(
-      item =>
-        costSdg <=
-        item.maxCost
-    );
+function getMarkupForCost(costSdg) {
+  const tier = PRICING_TIERS.find(
+    item => costSdg <= item.maxCost
+  );
 
-  return tier
-    ? tier.markup
-    : 0.10;
+  return tier ? tier.markup : 0.10;
 }
 
-function roundCommercialPrice(
-  value
-) {
-  if (
-    !Number.isFinite(value) ||
-    value <= 0
-  ) {
+function roundCommercialPrice(value) {
+  if (!Number.isFinite(value) || value <= 0) {
     return null;
   }
 
@@ -375,63 +217,58 @@ function roundCommercialPrice(
     step = 5000;
   }
 
-  return (
-    Math.ceil(
-      value / step
-    ) * step
-  );
+  return Math.ceil(value / step) * step;
 }
 
-function calculateSalePrice(
-  priceUsd
-) {
-  const usd =
-    Number(priceUsd);
+function calculateSalePrice(priceUsd) {
+  const usd = Number(priceUsd);
 
-  if (
-    !Number.isFinite(usd) ||
-    usd <= 0
-  ) {
+  if (!Number.isFinite(usd) || usd <= 0) {
     return null;
   }
 
-  const costSdg =
-    usd * USD_TO_SDG;
+  const costSdg = usd * USD_TO_SDG;
+  const markup = getMarkupForCost(costSdg);
+  const sale = costSdg * (1 + markup);
 
-  const markup =
-    getMarkupForCost(
-      costSdg
-    );
-
-  const sale =
-    costSdg *
-    (1 + markup);
-
-  return roundCommercialPrice(
-    sale
-  );
+  return roundCommercialPrice(sale);
 }
 
-function frontendCompatibleUsd(
-  saleSdg
-) {
-  const sale =
-    Number(saleSdg);
+function frontendCompatibleUsd(saleSdg) {
+  const sale = Number(saleSdg);
 
-  if (
-    !Number.isFinite(sale) ||
-    sale <= 0
-  ) {
+  if (!Number.isFinite(sale) || sale <= 0) {
     return null;
   }
 
-  // هذا هو سعر البيع الحقيقي المحول إلى USD.
-  return sale / USD_TO_SDG;
+  return sale / (8050 * 1.10);
 }
 
-function offerPriceUsd(
-  offer
-) {
+function quantityFromText(text) {
+  const match = String(text || "").match(
+    /\b(8100|6000|3850|3000|1800|1500|1300|1100|660|650|600|325|300|270|205|170|100|65|60|50|40|20)\b/i
+  );
+
+  return match ? Number(match[1]) : null;
+}
+
+function getOverride(categoryId, label) {
+  const overrides = PRICE_OVERRIDES[categoryId];
+
+  if (!overrides) {
+    return null;
+  }
+
+  const qty = quantityFromText(label);
+
+  if (qty === null) {
+    return null;
+  }
+
+  return overrides[String(qty)] || null;
+}
+
+function offerPriceUsd(offer) {
   const candidates = [
     offer?.price_usd,
     offer?.priceUSD,
@@ -441,16 +278,9 @@ function offerPriceUsd(
     offer?.price
   ];
 
-  for (
-    const value of candidates
-  ) {
-    const n =
-      Number(value);
-
-    if (
-      Number.isFinite(n) &&
-      n > 0
-    ) {
+  for (const value of candidates) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) {
       return n;
     }
   }
@@ -458,9 +288,7 @@ function offerPriceUsd(
   return null;
 }
 
-function offerLabel(
-  offer
-) {
+function offerLabel(offer) {
   return String(
     offer?.name ||
     offer?.title ||
@@ -474,15 +302,10 @@ function offerLabel(
   ).trim();
 }
 
-function offerUniqueId(
-  offer,
-  index
-) {
+function offerUniqueId(offer, index) {
   return String(
-    offer?.offer_id ||
-    offer?.card_id ||
-    offer?.key_id ||
     offer?.id ||
+    offer?.offer_id ||
     offer?.offerId ||
     offer?.sku ||
     offer?.code ||
@@ -491,85 +314,46 @@ function offerUniqueId(
 }
 
 // ======================================================
-// إعدادات المتجر
+// إعدادات المتجر — النشر والعروض
 // ======================================================
 
 const DEFAULT_STORE_SETTINGS = {
-  version:
-    STORE_SETTINGS_VERSION,
-
-  catalogMode:
-    "all",
-
-  publishedIds:
-    [],
-
-  hiddenIds:
-    [],
-
-  discounts:
-    {}
+  version: STORE_SETTINGS_VERSION,
+  catalogMode: "all",
+  publishedIds: [],
+  hiddenIds: [],
+  discounts: {}
 };
 
 function cloneDefaultStoreSettings() {
-  return JSON.parse(
-    JSON.stringify(
-      DEFAULT_STORE_SETTINGS
-    )
-  );
+  return JSON.parse(JSON.stringify(DEFAULT_STORE_SETTINGS));
 }
 
 function loadStoreSettings() {
   try {
-    if (
-      !fs.existsSync(
-        STORE_SETTINGS_FILE
-      )
-    ) {
-      const settings =
-        cloneDefaultStoreSettings();
-
-      saveStoreSettings(
-        settings
-      );
-
+    if (!fs.existsSync(STORE_SETTINGS_FILE)) {
+      const settings = cloneDefaultStoreSettings();
+      saveStoreSettings(settings);
       return settings;
     }
 
-    const parsed =
-      JSON.parse(
-        fs.readFileSync(
-          STORE_SETTINGS_FILE,
-          "utf8"
-        )
-      );
+    const parsed = JSON.parse(fs.readFileSync(STORE_SETTINGS_FILE, "utf8"));
 
     return {
       ...cloneDefaultStoreSettings(),
       ...parsed,
-
-      publishedIds:
-        Array.isArray(
-          parsed.publishedIds
-        )
-          ? parsed.publishedIds
-          : [],
-
-      hiddenIds:
-        Array.isArray(
-          parsed.hiddenIds
-        )
-          ? parsed.hiddenIds
-          : [],
-
+      publishedIds: Array.isArray(parsed.publishedIds)
+        ? parsed.publishedIds
+        : [],
+      hiddenIds: Array.isArray(parsed.hiddenIds)
+        ? parsed.hiddenIds
+        : [],
       discounts:
         parsed.discounts &&
-        typeof parsed.discounts ===
-          "object"
+        typeof parsed.discounts === "object"
           ? parsed.discounts
           : {}
     };
-
   } catch (error) {
     console.warn(
       "[STORE SETTINGS] Could not load settings:",
@@ -580,17 +364,11 @@ function loadStoreSettings() {
   }
 }
 
-function saveStoreSettings(
-  settings
-) {
+function saveStoreSettings(settings) {
   try {
     fs.writeFileSync(
       STORE_SETTINGS_FILE,
-      JSON.stringify(
-        settings,
-        null,
-        2
-      ),
+      JSON.stringify(settings, null, 2),
       "utf8"
     );
   } catch (error) {
@@ -601,71 +379,24 @@ function saveStoreSettings(
   }
 }
 
-let storeSettings =
-  loadStoreSettings();
+let storeSettings = loadStoreSettings();
 
-function normalizeDiscount(
-  raw
-) {
-  if (
-    !raw ||
-    typeof raw !== "object"
-  ) {
-    return null;
-  }
+function normalizeDiscount(raw) {
+  if (!raw || typeof raw !== "object") return null;
 
-  const type =
-    raw.type === "fixed"
-      ? "fixed"
-      : "percent";
+  const type = raw.type === "fixed" ? "fixed" : "percent";
+  const value = Number(raw.value);
+  const startsAt = raw.startsAt
+    ? new Date(raw.startsAt).toISOString()
+    : null;
+  const endsAt = raw.endsAt
+    ? new Date(raw.endsAt).toISOString()
+    : null;
+  const active = raw.active !== false;
 
-  const value =
-    Number(raw.value);
-
-  let startsAt = null;
-  let endsAt = null;
-
-  try {
-    if (raw.startsAt) {
-      startsAt =
-        new Date(
-          raw.startsAt
-        ).toISOString();
-    }
-
-    if (raw.endsAt) {
-      endsAt =
-        new Date(
-          raw.endsAt
-        ).toISOString();
-    }
-  } catch {
-    return null;
-  }
-
-  const active =
-    raw.active !== false;
-
-  if (
-    !Number.isFinite(value) ||
-    value <= 0
-  ) {
-    return null;
-  }
-
-  if (
-    type === "percent" &&
-    value >= 100
-  ) {
-    return null;
-  }
-
-  if (
-    type === "fixed" &&
-    value >= 100000000
-  ) {
-    return null;
-  }
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (type === "percent" && value >= 100) return null;
+  if (type === "fixed" && value >= 100000000) return null;
 
   return {
     type,
@@ -673,58 +404,29 @@ function normalizeDiscount(
     startsAt,
     endsAt,
     active,
-
-    label:
-      String(
-        raw.label ||
-        "عرض خاص"
-      )
-        .trim()
-        .slice(0, 100)
+    label: String(raw.label || "عرض خاص")
+      .trim()
+      .slice(0, 100)
   };
 }
 
-function isDiscountActive(
-  discount
-) {
-  if (
-    !discount ||
-    discount.active === false
-  ) {
-    return false;
-  }
+function isDiscountActive(discount) {
+  if (!discount || discount.active === false) return false;
 
-  const now =
-    Date.now();
+  const now = Date.now();
 
-  if (
-    discount.startsAt
-  ) {
-    const start =
-      Date.parse(
-        discount.startsAt
-      );
+  if (discount.startsAt) {
+    const start = Date.parse(discount.startsAt);
 
-    if (
-      Number.isFinite(start) &&
-      now < start
-    ) {
+    if (Number.isFinite(start) && now < start) {
       return false;
     }
   }
 
-  if (
-    discount.endsAt
-  ) {
-    const end =
-      Date.parse(
-        discount.endsAt
-      );
+  if (discount.endsAt) {
+    const end = Date.parse(discount.endsAt);
 
-    if (
-      Number.isFinite(end) &&
-      now > end
-    ) {
+    if (Number.isFinite(end) && now > end) {
       return false;
     }
   }
@@ -732,19 +434,13 @@ function isDiscountActive(
   return true;
 }
 
-function applyDiscount(
-  basePrice,
-  discount
-) {
-  const base =
-    Number(basePrice);
+function applyDiscount(basePrice, discount) {
+  const base = Number(basePrice);
 
   if (
     !Number.isFinite(base) ||
     base <= 0 ||
-    !isDiscountActive(
-      discount
-    )
+    !isDiscountActive(discount)
   ) {
     return {
       price: basePrice,
@@ -753,41 +449,17 @@ function applyDiscount(
     };
   }
 
-  let sale =
-    base;
+  let sale = base;
 
-  if (
-    discount.type ===
-    "fixed"
-  ) {
-    sale =
-      base -
-      Number(
-        discount.value
-      );
+  if (discount.type === "fixed") {
+    sale = base - Number(discount.value);
   } else {
-    sale =
-      base *
-      (
-        1 -
-        Number(
-          discount.value
-        ) / 100
-      );
+    sale = base * (1 - Number(discount.value) / 100);
   }
 
-  sale =
-    roundCommercialPrice(
-      Math.max(
-        100,
-        sale
-      )
-    );
+  sale = roundCommercialPrice(Math.max(100, sale));
 
-  if (
-    !sale ||
-    sale >= base
-  ) {
+  if (!sale || sale >= base) {
     return {
       price: basePrice,
       originalPrice: null,
@@ -802,69 +474,31 @@ function applyDiscount(
   };
 }
 
-function productVisibility(
-  product
-) {
-  const id =
-    String(
-      product.id || ""
-    );
+function productVisibility(product) {
+  const id = String(product.id || "");
 
-  if (
-    storeSettings.hiddenIds.includes(
-      id
-    )
-  ) {
+  if (storeSettings.hiddenIds.includes(id)) {
     return false;
   }
 
-  if (
-    storeSettings.catalogMode ===
-    "curated"
-  ) {
-    return storeSettings.publishedIds.includes(
-      id
-    );
+  if (storeSettings.catalogMode === "curated") {
+    return storeSettings.publishedIds.includes(id);
   }
 
   return true;
 }
 
-function enrichProductForStore(
-  product
-) {
-  const basePrice =
-    Number(
-      product.price_sdg
-    );
-
-  const discount =
-    storeSettings.discounts[
-      String(product.id)
-    ];
-
-  const pricing =
-    applyDiscount(
-      basePrice,
-      discount
-    );
+function enrichProductForStore(product) {
+  const basePrice = Number(product.price_sdg);
+  const discount = storeSettings.discounts[String(product.id)];
+  const pricing = applyDiscount(basePrice, discount);
 
   const result = {
     ...product,
-
-    price_sdg:
-      pricing.price,
-
-    price_usd:
-      frontendCompatibleUsd(
-        pricing.price
-      ),
-
-    original_price_sdg:
-      pricing.originalPrice,
-
-    discount:
-      pricing.discount
+    price_sdg: pricing.price,
+    price_usd: frontendCompatibleUsd(pricing.price),
+    original_price_sdg: pricing.originalPrice,
+    discount: pricing.discount
   };
 
   delete result.source_price_usd;
@@ -874,98 +508,59 @@ function enrichProductForStore(
   return result;
 }
 
-function getAdminProduct(
-  product
-) {
+function getAdminProduct(product) {
   const discount =
-    storeSettings.discounts[
-      String(product.id)
-    ] || null;
+    storeSettings.discounts[String(product.id)] || null;
 
   return {
     ...product,
-
-    published:
-      productVisibility(
-        product
-      ),
-
+    published: productVisibility(product),
     discount
   };
 }
 
-function getPublicProducts(
-  products
-) {
+function getPublicProducts(products) {
   return products
-    .filter(
-      productVisibility
-    )
-    .filter(
-      product =>
-        Number(
-          product.price_sdg
-        ) > 0
-    )
-    .map(
-      enrichProductForStore
-    );
+    .filter(productVisibility)
+    .filter(product => Number(product.price_sdg) > 0)
+    .map(enrichProductForStore);
 }
 
 function saveStoreSettingsNow() {
-  storeSettings.version =
-    STORE_SETTINGS_VERSION;
-
-  saveStoreSettings(
-    storeSettings
-  );
+  storeSettings.version = STORE_SETTINGS_VERSION;
+  saveStoreSettings(storeSettings);
 }
 
 // ======================================================
-// Price Cache
+// Cache الأسعار
 // ======================================================
 
 function loadPriceCacheFromDisk() {
   try {
-    if (
-      !fs.existsSync(
-        PRICE_CACHE_FILE
-      )
-    ) {
+    if (!fs.existsSync(PRICE_CACHE_FILE)) {
       return;
     }
 
-    const raw =
-      fs.readFileSync(
-        PRICE_CACHE_FILE,
-        "utf8"
-      );
+    const raw = fs.readFileSync(
+      PRICE_CACHE_FILE,
+      "utf8"
+    );
 
-    const parsed =
-      JSON.parse(raw);
+    const parsed = JSON.parse(raw);
 
     if (
       parsed &&
-      parsed.version ===
-        PRICE_CACHE_VERSION &&
-      Array.isArray(
-        parsed.products
-      ) &&
-      Number.isFinite(
-        parsed.builtAt
-      )
+      parsed.version === PRICE_CACHE_VERSION &&
+      Array.isArray(parsed.products) &&
+      Number.isFinite(parsed.builtAt)
     ) {
-      pricedCatalogCache =
-        parsed.products;
-
-      pricedCatalogBuiltAt =
-        parsed.builtAt;
+      pricedCatalogCache = parsed.products;
+      pricedCatalogBuiltAt = parsed.builtAt;
 
       console.log(
         `[PRICE CACHE] Loaded ${pricedCatalogCache.length} products from disk`
       );
     }
-
   } catch (error) {
     console.warn(
       "[PRICE CACHE] Could not load cache:",
@@ -974,23 +569,15 @@ function loadPriceCacheFromDisk() {
   }
 }
 
-function savePriceCacheToDisk(
-  products
-) {
+function savePriceCacheToDisk(products) {
   try {
     fs.writeFileSync(
       PRICE_CACHE_FILE,
       JSON.stringify(
         {
-          version:
-            PRICE_CACHE_VERSION,
-
-          builtAt:
-            Date.now(),
-
-          usdToSdg:
-            USD_TO_SDG,
-
+          version: PRICE_CACHE_VERSION,
+          builtAt: Date.now(),
+          usdToSdg: USD_TO_SDG,
           products
         },
         null,
@@ -998,7 +585,6 @@ function savePriceCacheToDisk(
       ),
       "utf8"
     );
-
   } catch (error) {
     console.warn(
       "[PRICE CACHE] Could not save cache:",
@@ -1009,19 +595,14 @@ function savePriceCacheToDisk(
 
 function cacheIsFresh() {
   return (
-    Array.isArray(
-      pricedCatalogCache
-    ) &&
-    pricedCatalogCache.length >
-      0 &&
-    Date.now() -
-      pricedCatalogBuiltAt <
-      CACHE_TTL_MS
+    Array.isArray(pricedCatalogCache) &&
+    pricedCatalogCache.length > 0 &&
+    Date.now() - pricedCatalogBuiltAt < CACHE_TTL_MS
   );
 }
 
 // ======================================================
-// Concurrency
+// تنفيذ طلبات كثيرة بعدد متوازٍ محدود
 // ======================================================
 
 async function mapWithConcurrency(
@@ -1029,56 +610,39 @@ async function mapWithConcurrency(
   worker,
   concurrency = 6
 ) {
-  const results =
-    new Array(
-      items.length
-    );
-
+  const results = new Array(items.length);
   let nextIndex = 0;
 
   async function runner() {
     while (true) {
-      const index =
-        nextIndex++;
+      const index = nextIndex++;
 
-      if (
-        index >=
-        items.length
-      ) {
+      if (index >= items.length) {
         return;
       }
 
       try {
-        results[index] =
-          await worker(
-            items[index],
-            index
-          );
+        results[index] = await worker(
+          items[index],
+          index
+        );
       } catch (error) {
         results[index] = {
           __error: true,
-          error:
-            error.message
+          error: error.message
         };
       }
     }
   }
 
-  const count =
-    Math.min(
-      concurrency,
-      items.length
-    );
-
-  if (count === 0) {
-    return results;
-  }
+  const count = Math.min(
+    concurrency,
+    items.length
+  );
 
   await Promise.all(
     Array.from(
-      {
-        length: count
-      },
+      { length: count },
       () => runner()
     )
   );
@@ -1087,131 +651,41 @@ async function mapWithConcurrency(
 }
 
 // ======================================================
-// عروض Fazer
-// ======================================================
-
-async function getTopupOffers(
-  categoryId
-) {
-  const data =
-    await fazerGet(
-      `/topups/offers?category_id=${encodeURIComponent(
-        categoryId
-      )}`,
-      30000
-    );
-
-  return {
-    offers:
-      getArray(
-        data,
-        [
-          "offers",
-          "items"
-        ]
-      ),
-
-    fields:
-      Array.isArray(
-        data?.fields
-      )
-        ? data.fields
-        : [],
-
-    name:
-      data?.name ||
-      null,
-
-    raw:
-      data
-  };
-}
-
-async function getGiftcardOffers(
-  categoryId
-) {
-  const data =
-    await fazerGet(
-      `/giftcards/cards?category_id=${encodeURIComponent(
-        categoryId
-      )}`,
-      30000
-    );
-
-  return {
-    offers:
-      getArray(
-        data,
-        [
-          "offers",
-          "cards",
-          "items"
-        ]
-      ),
-
-    fields:
-      Array.isArray(
-        data?.fields
-      )
-        ? data.fields
-        : [],
-
-    name:
-      data?.name ||
-      null,
-
-    raw:
-      data
-  };
-}
-
-async function getGameKeyOffers(
-  gameId
-) {
-  const data =
-    await fazerGet(
-      `/gamekeys/keys?game_id=${encodeURIComponent(
-        gameId
-      )}`,
-      30000
-    );
-
-  return {
-    offers:
-      getArray(
-        data,
-        [
-          "keys",
-          "items",
-          "offers"
-        ]
-      ),
-
-    name:
-      data?.GameName ||
-      data?.name ||
-      null,
-
-    platform:
-      data?.platform ||
-      "",
-
-    region:
-      data?.region ||
-      "",
-
-    regionRestriction:
-      data?.region_restriction ||
-      false,
-
-    raw:
-      data
-  };
-}
-
-// ======================================================
 // بناء الكتالوج المسعّر
 // ======================================================
+
+async function getTopupOffers(categoryId) {
+  const data = await fazerGet(
+    `/topups/offers?category_id=${encodeURIComponent(categoryId)}`,
+    30000
+  );
+
+  return getArray(data, ["items", "offers"]);
+}
+
+async function getGiftcardOffers(categoryId) {
+  const data = await fazerGet(
+    `/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`,
+    30000
+  );
+
+  return getArray(
+    data,
+    ["items", "cards", "offers"]
+  );
+}
+
+async function getGameKeyOffers(gameId) {
+  const data = await fazerGet(
+    `/gamekeys/keys?game_id=${encodeURIComponent(gameId)}`,
+    30000
+  );
+
+  return getArray(
+    data,
+    ["keys", "items", "offers"]
+  );
+}
 
 async function buildPricedCatalog() {
   console.log(
@@ -1220,178 +694,113 @@ async function buildPricedCatalog() {
 
   const familyResults =
     await Promise.allSettled([
-      getAllCategories(
-        "topups"
-      ),
-
-      getAllCategories(
-        "giftcards"
-      ),
-
-      getAllCategories(
-        "gamekeys"
-      )
+      getAllCategories("topups"),
+      getAllCategories("giftcards"),
+      getAllCategories("gamekeys")
     ]);
 
   const topups =
-    familyResults[0].status ===
-    "fulfilled"
+    familyResults[0].status === "fulfilled"
       ? familyResults[0].value
       : [];
 
   const giftcards =
-    familyResults[1].status ===
-    "fulfilled"
+    familyResults[1].status === "fulfilled"
       ? familyResults[1].value
       : [];
 
   const gamekeys =
-    familyResults[2].status ===
-    "fulfilled"
+    familyResults[2].status === "fulfilled"
       ? familyResults[2].value
       : [];
 
-  if (
-    familyResults[0].status ===
-    "rejected"
-  ) {
+  if (familyResults[0].status === "rejected") {
     console.warn(
-      `[PRICE] Topups catalog unavailable: ${
-        familyResults[0].reason?.message ||
-        familyResults[0].reason
-      }`
+      `[PRICE] Topups catalog unavailable: ${familyResults[0].reason?.message || familyResults[0].reason}`
     );
   }
 
-  if (
-    familyResults[1].status ===
-    "rejected"
-  ) {
+  if (familyResults[1].status === "rejected") {
     console.warn(
-      `[PRICE] Gift Cards catalog unavailable: ${
-        familyResults[1].reason?.message ||
-        familyResults[1].reason
-      }`
+      `[PRICE] Gift Cards catalog unavailable: ${familyResults[1].reason?.message || familyResults[1].reason}`
     );
   }
 
-  if (
-    familyResults[2].status ===
-    "rejected"
-  ) {
+  if (familyResults[2].status === "rejected") {
     console.warn(
-      `[PRICE] Game Keys catalog unavailable: ${
-        familyResults[2].reason?.message ||
-        familyResults[2].reason
-      }`
+      `[PRICE] Game Keys catalog unavailable: ${familyResults[2].reason?.message || familyResults[2].reason}`
     );
   }
 
   const products = [];
 
-  // ====================================================
-  // TOPUPS
-  // ====================================================
+  // ----------------------------------------------------
+  // Topups
+  // ----------------------------------------------------
 
   const topupResults =
     await mapWithConcurrency(
       topups,
-
       async category => {
-        const categoryId =
-          String(
-            category.category_id ||
-            category.id ||
-            ""
-          );
+        const categoryId = String(
+          category.category_id ||
+          category.id ||
+          ""
+        );
 
-        const categoryName =
-          String(
-            category.name ||
-            category.title ||
-            categoryId
-          );
-
-        if (!categoryId) {
-          return [];
-        }
+        const categoryName = String(
+          category.name ||
+          category.title ||
+          categoryId
+        );
 
         try {
-          const response =
-            await getTopupOffers(
-              categoryId
-            );
-
           const offers =
-            response.offers;
-
-          const fields =
-            response.fields.length
-              ? response.fields
-              : (
-                  Array.isArray(
-                    category.fields
-                  )
-                    ? category.fields
-                    : []
-                );
+            await getTopupOffers(categoryId);
 
           return offers.map(
-            (
-              offer,
-              index
-            ) => {
+            (offer, index) => {
               const label =
-                offerLabel(
-                  offer
-                );
+                offerLabel(offer);
 
               const priceUsd =
-                offerPriceUsd(
-                  offer
+                offerPriceUsd(offer);
+
+              const forcedPrice =
+                getOverride(
+                  categoryId,
+                  label
                 );
 
               const calculatedPrice =
+                forcedPrice ??
                 calculateSalePrice(
                   priceUsd
                 );
 
-              const offerId =
-                String(
-                  offer.offer_id ||
-                  offer.id ||
-                  offer.offerId ||
-                  offer.sku ||
-                  offer.code ||
-                  index
-                );
-
               return {
                 id:
-                  `${categoryId}__offer__${offerId}`,
+                  `${categoryId}__offer__${offerUniqueId(
+                    offer,
+                    index
+                  )}`,
 
-                category_id:
-                  categoryId,
-
-                offer_id:
-                  offerId,
+                category_id: categoryId,
 
                 name:
                   label === "عرض"
                     ? categoryName
                     : `${categoryName} — ${label}`,
 
-                base_name:
-                  categoryName,
+                base_name: categoryName,
 
-                type:
-                  "topup",
+                type: "topup",
 
                 note:
-                  category.note ||
-                  "",
+                  category.note || "",
 
-                fields,
+                fields:
+                  category.fields || [],
 
                 price_usd:
                   frontendCompatibleUsd(
@@ -1410,147 +819,106 @@ async function buildPricedCatalog() {
                     : null,
 
                 markup_percent:
-                  priceUsd
-                    ? getMarkupForCost(
-                        priceUsd *
-                        USD_TO_SDG
-                      ) * 100
-                    : null,
+                  forcedPrice !== null
+                    ? "custom"
+                    : (
+                        priceUsd
+                          ? getMarkupForCost(
+                              priceUsd *
+                              USD_TO_SDG
+                            ) * 100
+                          : null
+                      ),
 
                 price_sdg:
                   calculatedPrice,
 
                 pricing_mode:
-                  "automatic",
+                  forcedPrice !== null
+                    ? "manual_override"
+                    : "automatic",
 
-                stock:
-                  offer?.stock ??
-                  null,
-
-                min_order_quantity:
-                  offer?.min_order_quantity ??
-                  1,
-
-                max_order_quantity:
-                  offer?.max_order_quantity ??
-                  null,
-
-                offer
+                offer: offer
               };
             }
           );
-
         } catch (error) {
           console.warn(
             `[PRICE] Failed topup ${categoryId}: ${error.message}`
           );
 
-          return [];
+          return [
+            {
+              id: categoryId,
+              category_id: categoryId,
+              name: categoryName,
+              type: "topup",
+              note: category.note || "",
+              fields: category.fields || [],
+              price_usd: null,
+              price_sdg: null,
+              pricing_mode: "unavailable"
+            }
+          ];
         }
       },
-
       6
     );
 
-  for (
-    const result of
-    topupResults
-  ) {
-    if (
-      Array.isArray(result)
-    ) {
-      products.push(
-        ...result
-      );
+  for (const result of topupResults) {
+    if (Array.isArray(result)) {
+      products.push(...result);
     }
   }
 
-  // ====================================================
-  // GIFT CARDS
-  // ====================================================
+  // ----------------------------------------------------
+  // Gift Cards
+  // ----------------------------------------------------
 
   const giftcardResults =
     await mapWithConcurrency(
       giftcards,
-
       async category => {
-        const categoryId =
-          String(
-            category.category_id ||
-            category.id ||
-            ""
-          );
+        const categoryId = String(
+          category.category_id ||
+          category.id ||
+          ""
+        );
 
-        const categoryName =
-          String(
-            category.name ||
-            category.title ||
-            categoryId
-          );
-
-        if (!categoryId) {
-          return [];
-        }
+        const categoryName = String(
+          category.name ||
+          category.title ||
+          categoryId
+        );
 
         try {
-          const response =
+          const offers =
             await getGiftcardOffers(
               categoryId
             );
 
-          const offers =
-            response.offers;
-
-          const fields =
-            response.fields.length
-              ? response.fields
-              : (
-                  Array.isArray(
-                    category.fields
-                  )
-                    ? category.fields
-                    : []
-                );
-
           return offers.map(
-            (
-              offer,
-              index
-            ) => {
+            (offer, index) => {
               const label =
-                offerLabel(
-                  offer
-                );
+                offerLabel(offer);
 
               const priceUsd =
-                offerPriceUsd(
-                  offer
-                );
+                offerPriceUsd(offer);
 
               const calculatedPrice =
                 calculateSalePrice(
                   priceUsd
                 );
 
-              const cardId =
-                String(
-                  offer.card_id ||
-                  offer.id ||
-                  offer.cardId ||
-                  offer.sku ||
-                  offer.code ||
-                  index
-                );
-
               return {
                 id:
-                  `${categoryId}__card__${cardId}`,
+                  `${categoryId}__card__${offerUniqueId(
+                    offer,
+                    index
+                  )}`,
 
                 category_id:
                   categoryId,
-
-                card_id:
-                  cardId,
 
                 name:
                   label === "عرض"
@@ -1560,14 +928,13 @@ async function buildPricedCatalog() {
                 base_name:
                   categoryName,
 
-                type:
-                  "gift_card",
+                type: "gift_card",
 
                 note:
-                  category.note ||
-                  "",
+                  category.note || "",
 
-                fields,
+                fields:
+                  category.fields || [],
 
                 price_usd:
                   frontendCompatibleUsd(
@@ -1600,94 +967,78 @@ async function buildPricedCatalog() {
                   "automatic",
 
                 stock:
-                  offer?.stock ??
-                  null,
+                  offer?.stock ?? null,
 
                 min_order_quantity:
-                  offer?.min_order_quantity ??
-                  1,
+                  offer?.min_order_quantity ?? 1,
 
                 max_order_quantity:
-                  offer?.max_order_quantity ??
-                  null,
+                  offer?.max_order_quantity ?? null,
 
-                offer
+                offer: offer
               };
             }
           );
-
         } catch (error) {
           console.warn(
             `[PRICE] Failed gift card ${categoryId}: ${error.message}`
           );
 
-          return [];
+          return [
+            {
+              id: categoryId,
+              category_id: categoryId,
+              name: categoryName,
+              type: "gift_card",
+              note: category.note || "",
+              fields: category.fields || [],
+              price_usd: null,
+              price_sdg: null,
+              pricing_mode: "unavailable"
+            }
+          ];
         }
       },
-
       6
     );
 
-  for (
-    const result of
-    giftcardResults
-  ) {
-    if (
-      Array.isArray(result)
-    ) {
-      products.push(
-        ...result
-      );
+  for (const result of giftcardResults) {
+    if (Array.isArray(result)) {
+      products.push(...result);
     }
   }
 
-  // ====================================================
-  // GAME KEYS
-  // ====================================================
+  // ----------------------------------------------------
+  // Game Keys
+  // ----------------------------------------------------
 
   const gameKeyResults =
     await mapWithConcurrency(
       gamekeys,
-
       async game => {
-        const gameId =
-          String(
-            game.game_id ||
-            game.category_id ||
-            game.id ||
-            ""
-          );
+        const gameId = String(
+          game.game_id ||
+          game.category_id ||
+          game.id ||
+          ""
+        );
 
-        const gameName =
-          String(
-            game.GameName ||
-            game.name ||
-            game.title ||
-            gameId
-          );
-
-        if (!gameId) {
-          return [];
-        }
+        const gameName = String(
+          game.name ||
+          game.GameName ||
+          gameId
+        );
 
         try {
-          const response =
+          const keys =
             await getGameKeyOffers(
               gameId
             );
 
-          const keys =
-            response.offers;
-
           return keys.map(
-            (
-              key,
-              index
-            ) => {
+            (key, index) => {
               const priceUsd =
-                offerPriceUsd(
-                  key
-                );
+                offerPriceUsd(key);
 
               const calculatedPrice =
                 calculateSalePrice(
@@ -1695,57 +1046,34 @@ async function buildPricedCatalog() {
                 );
 
               const label =
-                offerLabel(
-                  key
-                );
-
-              const keyId =
-                String(
-                  key.key_id ||
-                  key.id ||
-                  key.keyId ||
-                  key.sku ||
-                  key.code ||
-                  index
-                );
+                offerLabel(key);
 
               return {
                 id:
-                  `${gameId}__key__${keyId}`,
+                  `${gameId}__key__${offerUniqueId(
+                    key,
+                    index
+                  )}`,
 
-                category_id:
-                  gameId,
-
-                game_id:
-                  gameId,
-
-                key_id:
-                  keyId,
+                category_id: gameId,
 
                 name:
                   label === "عرض"
                     ? gameName
                     : `${gameName} — ${label}`,
 
-                base_name:
-                  gameName,
+                base_name: gameName,
 
-                type:
-                  "game_key",
+                type: "game_key",
 
                 platform:
-                  game.platform ||
-                  response.platform ||
-                  "",
+                  game.platform || "",
 
                 region:
-                  game.region ||
-                  response.region ||
-                  "",
+                  game.region || "",
 
                 region_restriction:
                   game.region_restriction ||
-                  response.regionRestriction ||
                   false,
 
                 price_usd:
@@ -1779,45 +1107,47 @@ async function buildPricedCatalog() {
                   "automatic",
 
                 stock:
-                  key?.stock ??
-                  null,
+                  key?.stock ?? null,
 
                 min_order_quantity:
-                  key?.min_order_quantity ??
-                  1,
+                  key?.min_order_quantity ?? 1,
 
                 max_order_quantity:
-                  key?.max_order_quantity ??
-                  null,
+                  key?.max_order_quantity ?? null,
 
-                offer:
-                  key
+                offer: key
               };
             }
           );
-
         } catch (error) {
           console.warn(
             `[PRICE] Failed game keys ${gameId}: ${error.message}`
           );
 
-          return [];
+          return [
+            {
+              id: gameId,
+              category_id: gameId,
+              name: gameName,
+              type: "game_key",
+              platform: game.platform || "",
+              region: game.region || "",
+              region_restriction:
+                game.region_restriction ||
+                false,
+              price_usd: null,
+              price_sdg: null,
+              pricing_mode: "unavailable"
+            }
+          ];
         }
       },
-
       6
     );
 
-  for (
-    const result of
-    gameKeyResults
-  ) {
-    if (
-      Array.isArray(result)
-    ) {
-      products.push(
-        ...result
-      );
+  for (const result of gameKeyResults) {
+    if (Array.isArray(result)) {
+      products.push(...result);
     }
   }
 
@@ -1825,42 +1155,29 @@ async function buildPricedCatalog() {
     products.filter(
       product =>
         Number.isFinite(
-          Number(
-            product.price_sdg
-          )
+          Number(product.price_sdg)
         ) &&
-        Number(
-          product.price_sdg
-        ) > 0
+        Number(product.price_sdg) > 0
     ).length;
 
   console.log(
     `[PRICE CACHE] Built ${products.length} catalog entries; ${usablePrices} have prices`
   );
 
-  pricedCatalogCache =
-    products;
+  pricedCatalogCache = products;
+  pricedCatalogBuiltAt = Date.now();
 
-  pricedCatalogBuiltAt =
-    Date.now();
-
-  savePriceCacheToDisk(
-    products
-  );
+  savePriceCacheToDisk(products);
 
   return products;
 }
 
 async function getPricedCatalog() {
-  if (
-    cacheIsFresh()
-  ) {
+  if (cacheIsFresh()) {
     return pricedCatalogCache;
   }
 
-  if (
-    priceRefreshPromise
-  ) {
+  if (priceRefreshPromise) {
     return priceRefreshPromise;
   }
 
@@ -1884,8 +1201,7 @@ async function getPricedCatalog() {
         throw error;
       })
       .finally(() => {
-        priceRefreshPromise =
-          null;
+        priceRefreshPromise = null;
       });
 
   return priceRefreshPromise;
@@ -1894,35 +1210,23 @@ async function getPricedCatalog() {
 loadPriceCacheFromDisk();
 
 // ======================================================
-// Health
+// الصحة
 // ======================================================
 
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      ok: true,
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "ABESHA STORE",
+    status: "running",
 
-      service:
-        "ABESHA STORE",
-
-      status:
-        "running",
-
-      pricing: {
-        usdToSdg:
-          USD_TO_SDG,
-
-        cacheFresh:
-          cacheIsFresh(),
-
-        cachedProducts:
-          pricedCatalogCache?.length ||
-          0
-      }
-    });
-  }
-);
+    pricing: {
+      usdToSdg: USD_TO_SDG,
+      cacheFresh: cacheIsFresh(),
+      cachedProducts:
+        pricedCatalogCache?.length || 0
+    }
+  });
+});
 
 // ======================================================
 // Fazer /me
@@ -1933,30 +1237,24 @@ app.get(
   async (req, res) => {
     try {
       const data =
-        await fazerGet(
-          "/me"
-        );
+        await fazerGet("/me");
 
       res.json(data);
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
 
 // ======================================================
-// Fazer Catalog
+// Fazer catalog
 // ======================================================
 
 app.get(
@@ -1965,34 +1263,23 @@ app.get(
     try {
       const results =
         await Promise.allSettled([
-          getAllCategories(
-            "topups"
-          ),
-
-          getAllCategories(
-            "giftcards"
-          ),
-
-          getAllCategories(
-            "gamekeys"
-          )
+          getAllCategories("topups"),
+          getAllCategories("giftcards"),
+          getAllCategories("gamekeys")
         ]);
 
       const topups =
-        results[0].status ===
-        "fulfilled"
+        results[0].status === "fulfilled"
           ? results[0].value
           : [];
 
       const giftcards =
-        results[1].status ===
-        "fulfilled"
+        results[1].status === "fulfilled"
           ? results[1].value
           : [];
 
       const gamekeys =
-        results[2].status ===
-        "fulfilled"
+        results[2].status === "fulfilled"
           ? results[2].value
           : [];
 
@@ -2004,27 +1291,21 @@ app.get(
             ok:
               results[0].status ===
               "fulfilled",
-
-            items:
-              topups
+            items: topups
           },
 
           giftcards: {
             ok:
               results[1].status ===
               "fulfilled",
-
-            items:
-              giftcards
+            items: giftcards
           },
 
           gamekeys: {
             ok:
               results[2].status ===
               "fulfilled",
-
-            items:
-              gamekeys
+            items: gamekeys
           }
         },
 
@@ -2033,19 +1314,15 @@ app.get(
           giftcards.length +
           gamekeys.length
       });
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2065,39 +1342,25 @@ app.get(
 
       res.json({
         ok: true,
-
-        kind:
-          "topup",
-
+        kind: "topup",
         items,
 
         meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
+          total: items.length,
+          limit: items.length,
+          next_cursor: null,
+          has_more: false
         }
       });
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2110,36 +1373,30 @@ app.get(
         req.query.category_id;
 
       if (!categoryId) {
-        return res.status(
-          400
-        ).json({
-          ok: false,
-          error:
-            "category_id is required"
-        });
+        return res
+          .status(400)
+          .json({
+            ok: false,
+            error:
+              "category_id is required"
+          });
       }
 
       const data =
         await fazerGet(
-          `/topups/offers?category_id=${encodeURIComponent(
-            categoryId
-          )}`
+          `/topups/offers?category_id=${encodeURIComponent(categoryId)}`
         );
 
       res.json(data);
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2159,39 +1416,25 @@ app.get(
 
       res.json({
         ok: true,
-
-        kind:
-          "gift_card",
-
+        kind: "gift_card",
         items,
 
         meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
+          total: items.length,
+          limit: items.length,
+          next_cursor: null,
+          has_more: false
         }
       });
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2204,36 +1447,185 @@ app.get(
         req.query.category_id;
 
       if (!categoryId) {
-        return res.status(
-          400
-        ).json({
-          ok: false,
-          error:
-            "category_id is required"
-        });
+        return res
+          .status(400)
+          .json({
+            ok: false,
+            error:
+              "category_id is required"
+          });
       }
 
       const data =
         await fazerGet(
-          `/giftcards/cards?category_id=${encodeURIComponent(
-            categoryId
-          )}`
+          `/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`
         );
 
       res.json(data);
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
+    }
+  }
+);
+
+// ======================================================
+// المنتجات — النسخة المسعّرة
+// ======================================================
+
+app.get(
+  "/api/products",
+  async (req, res) => {
+    try {
+      const products =
+        await getPricedCatalog();
+
+      const visibleProducts =
+        getPublicProducts(products);
+
+      res.json({
+        ok: true,
+        total:
+          visibleProducts.length,
+
+        products:
+          visibleProducts,
+
+        pricing: {
+          currency: "SDG",
+          usdToSdg: USD_TO_SDG,
+
+          catalogMode:
+            storeSettings.catalogMode,
+
+          tiers:
+            PRICING_TIERS.map(
+              tier => ({
+                maxCost:
+                  Number.isFinite(
+                    tier.maxCost
+                  )
+                    ? tier.maxCost
+                    : null,
+
+                markupPercent:
+                  tier.markup * 100
+              })
+            ),
+
+          roundRules: {
+            under10000: 100,
+            from10000To100000: 500,
+            from100000To500000: 1000,
+            from500000: 5000
+          }
+        }
       });
+    } catch (error) {
+      res
+        .status(500)
+        .json({
+          ok: false,
+          error: error.message
+        });
+    }
+  }
+);
+
+// ======================================================
+// تحديث الأسعار يدويًا
+// ======================================================
+
+app.post(
+  "/api/prices/refresh",
+  async (req, res) => {
+    try {
+      const adminKey =
+        req.headers["x-admin-key"];
+
+      if (
+        !process.env.ADMIN_KEY ||
+        adminKey !==
+          process.env.ADMIN_KEY
+      ) {
+        return res
+          .status(401)
+          .json({
+            ok: false,
+            error: "Unauthorized"
+          });
+      }
+
+      pricedCatalogCache = null;
+      pricedCatalogBuiltAt = 0;
+
+      const products =
+        await getPricedCatalog();
+
+      res.json({
+        ok: true,
+        total: products.length,
+        refreshedAt:
+          new Date().toISOString()
+      });
+    } catch (error) {
+      res
+        .status(500)
+        .json({
+          ok: false,
+          error: error.message
+        });
+    }
+  }
+);
+
+// ======================================================
+// PUBG ID validation
+// ======================================================
+
+app.post(
+  "/api/fazer/topups/validate-id",
+  async (req, res) => {
+    try {
+      const {
+        category_id,
+        fields
+      } = req.body;
+
+      const data =
+        await fazerFetch(
+          "/topups/validate-id",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body: JSON.stringify({
+              category_id,
+              fields
+            })
+          }
+        );
+
+      res.json(data);
+    } catch (error) {
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2253,269 +1645,25 @@ app.get(
 
       res.json({
         ok: true,
-
-        kind:
-          "game_key",
-
+        kind: "game_key",
         items,
 
         meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
+          total: items.length,
+          limit: items.length,
+          next_cursor: null,
+          has_more: false
         }
       });
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/gamekeys/keys",
-  async (req, res) => {
-    try {
-      const gameId =
-        req.query.game_id;
-
-      if (!gameId) {
-        return res.status(
-          400
-        ).json({
+      res
+        .status(error.status || 500)
+        .json({
           ok: false,
-          error:
-            "game_id is required"
+          error: error.message,
+          details:
+            error.data || null
         });
-      }
-
-      const data =
-        await fazerGet(
-          `/gamekeys/keys?game_id=${encodeURIComponent(
-            gameId
-          )}`
-        );
-
-      res.json(data);
-
-    } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
-    }
-  }
-);
-
-// ======================================================
-// المنتجات المسعّرة
-// ======================================================
-
-app.get(
-  "/api/products",
-  async (req, res) => {
-    try {
-      const products =
-        await getPricedCatalog();
-
-      const visibleProducts =
-        getPublicProducts(
-          products
-        );
-
-      res.json({
-        ok: true,
-
-        total:
-          visibleProducts.length,
-
-        products:
-          visibleProducts,
-
-        pricing: {
-          currency:
-            "SDG",
-
-          usdToSdg:
-            USD_TO_SDG,
-
-          catalogMode:
-            storeSettings.catalogMode,
-
-          tiers:
-            PRICING_TIERS.map(
-              tier => ({
-                maxCost:
-                  Number.isFinite(
-                    tier.maxCost
-                  )
-                    ? tier.maxCost
-                    : null,
-
-                markupPercent:
-                  tier.markup *
-                  100
-              })
-            ),
-
-          roundRules: {
-            under10000:
-              100,
-
-            from10000To100000:
-              500,
-
-            from100000To500000:
-              1000,
-
-            from500000:
-              5000
-          }
-        }
-      });
-
-    } catch (error) {
-      res.status(
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-// ======================================================
-// Refresh Prices
-// ======================================================
-
-app.post(
-  "/api/prices/refresh",
-  async (req, res) => {
-    try {
-      const adminKey =
-        req.headers[
-          "x-admin-key"
-        ];
-
-      if (
-        !process.env.ADMIN_KEY ||
-        adminKey !==
-          process.env.ADMIN_KEY
-      ) {
-        return res.status(
-          401
-        ).json({
-          ok: false,
-          error:
-            "Unauthorized"
-        });
-      }
-
-      pricedCatalogCache =
-        null;
-
-      pricedCatalogBuiltAt =
-        0;
-
-      const products =
-        await getPricedCatalog();
-
-      res.json({
-        ok: true,
-
-        total:
-          products.length,
-
-        refreshedAt:
-          new Date().toISOString()
-      });
-
-    } catch (error) {
-      res.status(
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-// ======================================================
-// PUBG / Topup ID validation
-// ======================================================
-
-app.post(
-  "/api/fazer/topups/validate-id",
-  async (req, res) => {
-    try {
-      const {
-        category_id,
-        fields
-      } = req.body;
-
-      const data =
-        await fazerFetch(
-          "/topups/validate-id",
-          {
-            method:
-              "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json"
-            },
-
-            body:
-              JSON.stringify({
-                category_id,
-                fields
-              })
-          }
-        );
-
-      res.json(data);
-
-    } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
     }
   }
 );
@@ -2534,19 +1682,15 @@ app.get(
         );
 
       res.json(data);
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
@@ -2556,36 +1700,29 @@ app.get(
   async (req, res) => {
     try {
       const limit =
-        req.query.limit ||
-        "100";
+        req.query.limit || "100";
 
       const data =
         await fazerGet(
-          `/steam-gifts/games?limit=${encodeURIComponent(
-            limit
-          )}`
+          `/steam-gifts/games?limit=${encodeURIComponent(limit)}`
         );
 
       res.json(data);
-
     } catch (error) {
-      res.status(
-        error.status ||
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data ||
-          null
-      });
+      res
+        .status(error.status || 500)
+        .json({
+          ok: false,
+          error: error.message,
+          details:
+            error.data || null
+        });
     }
   }
 );
 
 // ======================================================
-// الكتالوج القديم للتوافق
+// الكتالوج الموحد القديم
 // ======================================================
 
 app.get(
@@ -2594,17 +1731,9 @@ app.get(
     try {
       const familyResults =
         await Promise.allSettled([
-          getAllCategories(
-            "topups"
-          ),
-
-          getAllCategories(
-            "giftcards"
-          ),
-
-          getAllCategories(
-            "gamekeys"
-          )
+          getAllCategories("topups"),
+          getAllCategories("giftcards"),
+          getAllCategories("gamekeys")
         ]);
 
       const topups =
@@ -2626,93 +1755,110 @@ app.get(
           : [];
 
       const products = [
-        ...topups.map(
-          item => ({
-            id:
-              item.category_id,
+        ...topups.map(item => ({
+          id: item.category_id,
+          name: item.name,
+          type: "topup",
+          note: item.note || "",
+          fields:
+            item.fields || []
+        })),
 
-            name:
-              item.name,
+        ...giftcards.map(item => ({
+          id: item.category_id,
+          name: item.name,
+          type: "gift_card",
+          note: item.note || "",
+          fields:
+            item.fields || []
+        })),
 
-            type:
-              "topup",
+        ...gamekeys.map(item => ({
+          id:
+            item.game_id ||
+            item.category_id,
 
-            note:
-              item.note ||
-              "",
+          name: item.name,
 
-            fields:
-              item.fields ||
-              []
-          })
-        ),
+          type: "game_key",
 
-        ...giftcards.map(
-          item => ({
-            id:
-              item.category_id,
+          platform:
+            item.platform || "",
 
-            name:
-              item.name,
+          region:
+            item.region || "",
 
-            type:
-              "gift_card",
-
-            note:
-              item.note ||
-              "",
-
-            fields:
-              item.fields ||
-              []
-          })
-        ),
-
-        ...gamekeys.map(
-          item => ({
-            id:
-              item.game_id ||
-              item.category_id,
-
-            name:
-              item.name ||
-              item.GameName,
-
-            type:
-              "game_key",
-
-            platform:
-              item.platform ||
-              "",
-
-            region:
-              item.region ||
-              "",
-
-            region_restriction:
-              item.region_restriction ||
-              false
-          })
-        )
+          region_restriction:
+            item.region_restriction ||
+            false
+        }))
       ];
+
+      res.json({
+        ok: true,
+        total: products.length,
+        products
+      });
+    } catch (error) {
+      res
+        .status(500)
+        .json({
+          ok: false,
+          error: error.message
+        });
+    }
+  }
+);
+
+// ======================================================
+// المنتجات المنشورة
+// ======================================================
+
+app.get(
+  "/api/catalog/published",
+  (req, res) => {
+    try {
+      const configPath =
+        path.join(
+          __dirname,
+          "catalog-config.json"
+        );
+
+      const config =
+        JSON.parse(
+          fs.readFileSync(
+            configPath,
+            "utf8"
+          )
+        );
 
       res.json({
         ok: true,
 
         total:
-          products.length,
+          Array.isArray(
+            config.published
+          )
+            ? config.published.length
+            : 0,
 
-        products
+        published:
+          Array.isArray(
+            config.published
+          )
+            ? config.published
+            : [],
+
+        pricing:
+          config.pricing || {}
       });
-
     } catch (error) {
-      res.status(
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message
-      });
+      res
+        .status(500)
+        .json({
+          ok: false,
+          error: error.message
+        });
     }
   }
 );
@@ -2721,51 +1867,11 @@ app.get(
 // الإدارة
 // ======================================================
 
-function requireAdmin(
-  req,
-  res,
-  next
-) {
-  const adminKey =
-    req.headers[
-      "x-admin-key"
-    ];
-
-  if (
-    !process.env.ADMIN_KEY
-  ) {
-    return res.status(
-      500
-    ).json({
-      ok: false,
-      error:
-        "ADMIN_KEY is not configured"
-    });
-  }
-
-  if (
-    !adminKey ||
-    adminKey !==
-      process.env.ADMIN_KEY
-  ) {
-    return res.status(
-      401
-    ).json({
-      ok: false,
-      error:
-        "Unauthorized"
-    });
-  }
-
-  next();
-}
-
 app.get(
   "/api/admin/status",
   (req, res) => {
     res.json({
       ok: true,
-
       adminKeyConfigured:
         Boolean(
           process.env.ADMIN_KEY
@@ -2773,6 +1879,40 @@ app.get(
     });
   }
 );
+
+function requireAdmin(
+  req,
+  res,
+  next
+) {
+  const adminKey =
+    req.headers["x-admin-key"];
+
+  if (!process.env.ADMIN_KEY) {
+    return res
+      .status(500)
+      .json({
+        ok: false,
+        error:
+          "ADMIN_KEY is not configured"
+      });
+  }
+
+  if (
+    !adminKey ||
+    adminKey !==
+      process.env.ADMIN_KEY
+  ) {
+    return res
+      .status(401)
+      .json({
+        ok: false,
+        error: "Unauthorized"
+      });
+  }
+
+  next();
+}
 
 app.get(
   "/api/admin/catalog",
@@ -2784,9 +1924,7 @@ app.get(
 
       res.json({
         ok: true,
-
-        total:
-          data.length,
+        total: data.length,
 
         products:
           data.map(
@@ -2804,15 +1942,13 @@ app.get(
             PRICING_TIERS
         }
       });
-
     } catch (error) {
-      res.status(
-        500
-      ).json({
-        ok: false,
-        error:
-          error.message
-      });
+      res
+        .status(500)
+        .json({
+          ok: false,
+          error: error.message
+        });
     }
   }
 );
@@ -2844,23 +1980,20 @@ app.post(
   (req, res) => {
     const mode =
       String(
-        req.body?.mode ||
-        ""
+        req.body?.mode || ""
       ).trim();
 
     if (
-      ![
-        "all",
-        "curated"
-      ].includes(mode)
+      !["all", "curated"]
+        .includes(mode)
     ) {
-      return res.status(
-        400
-      ).json({
-        ok: false,
-        error:
-          "mode must be all or curated"
-      });
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "mode must be all or curated"
+        });
     }
 
     storeSettings.catalogMode =
@@ -2870,7 +2003,6 @@ app.post(
 
     res.json({
       ok: true,
-
       catalogMode:
         storeSettings.catalogMode
     });
@@ -2883,31 +2015,27 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId ||
-        ""
+        req.body?.productId || ""
       ).trim();
 
     if (!productId) {
-      return res.status(
-        400
-      ).json({
-        ok: false,
-        error:
-          "productId is required"
-      });
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "productId is required"
+        });
     }
 
     storeSettings.hiddenIds =
       storeSettings.hiddenIds.filter(
-        id =>
-          id !==
-          productId
+        id => id !== productId
       );
 
     if (
-      !storeSettings.publishedIds.includes(
-        productId
-      )
+      !storeSettings.publishedIds
+        .includes(productId)
     ) {
       storeSettings.publishedIds.push(
         productId
@@ -2918,11 +2046,8 @@ app.post(
 
     res.json({
       ok: true,
-
       productId,
-
-      published:
-        true
+      published: true
     });
   }
 );
@@ -2933,25 +2058,22 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId ||
-        ""
+        req.body?.productId || ""
       ).trim();
 
     if (!productId) {
-      return res.status(
-        400
-      ).json({
-        ok: false,
-        error:
-          "productId is required"
-      });
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "productId is required"
+        });
     }
 
     storeSettings.publishedIds =
       storeSettings.publishedIds.filter(
-        id =>
-          id !==
-          productId
+        id => id !== productId
       );
 
     storeSettings.hiddenIds =
@@ -2966,11 +2088,8 @@ app.post(
 
     res.json({
       ok: true,
-
       productId,
-
-      published:
-        false
+      published: false
     });
   }
 );
@@ -2981,8 +2100,7 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId ||
-        ""
+        req.body?.productId || ""
       ).trim();
 
     const discount =
@@ -2991,23 +2109,23 @@ app.post(
       );
 
     if (!productId) {
-      return res.status(
-        400
-      ).json({
-        ok: false,
-        error:
-          "productId is required"
-      });
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "productId is required"
+        });
     }
 
     if (!discount) {
-      return res.status(
-        400
-      ).json({
-        ok: false,
-        error:
-          "Invalid discount"
-      });
+      return res
+        .status(400)
+        .json({
+          ok: false,
+          error:
+            "Invalid discount"
+        });
     }
 
     storeSettings.discounts[
@@ -3018,9 +2136,7 @@ app.post(
 
     res.json({
       ok: true,
-
       productId,
-
       discount
     });
   }
@@ -3032,8 +2148,7 @@ app.delete(
   (req, res) => {
     const productId =
       String(
-        req.params.productId ||
-        ""
+        req.params.productId || ""
       ).trim();
 
     delete storeSettings.discounts[
@@ -3044,11 +2159,8 @@ app.delete(
 
     res.json({
       ok: true,
-
       productId,
-
-      discount:
-        null
+      discount: null
     });
   }
 );
@@ -3060,162 +2172,162 @@ app.delete(
 app.get(
   "/admin",
   (req, res) => {
-    res.type("html").send(`
-<!doctype html>
+    res.type("html").send(`<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ABESHA STORE — الإدارة</title>
 
 <style>
-*{
-  box-sizing:border-box
-}
+*{box-sizing:border-box}
 
 body{
-  margin:0;
-  font-family:Arial,sans-serif;
-  background:#071426;
-  color:#eef5ff
+margin:0;
+font-family:Arial,sans-serif;
+background:#071426;
+color:#eef5ff
 }
 
 header{
-  padding:18px 16px;
-  background:#0b1f3a;
-  border-bottom:1px solid #1d416e;
-  position:sticky;
-  top:0;
-  z-index:5
+padding:18px 16px;
+background:#0b1f3a;
+border-bottom:1px solid #1d416e;
+position:sticky;
+top:0;
+z-index:5
 }
 
 h1{
-  margin:0 0 6px;
-  font-size:22px
+margin:0 0 6px;
+font-size:22px
 }
 
 .muted{
-  color:#9fb3cc;
-  font-size:13px
+color:#9fb3cc;
+font-size:13px
 }
 
 .wrap{
-  max-width:1200px;
-  margin:auto;
-  padding:16px
+max-width:1200px;
+margin:auto;
+padding:16px
 }
 
 .panel{
-  background:#0b1f3a;
-  border:1px solid #1d416e;
-  border-radius:14px;
-  padding:14px;
-  margin-bottom:14px
+background:#0b1f3a;
+border:1px solid #1d416e;
+border-radius:14px;
+padding:14px;
+margin-bottom:14px
 }
 
 .row{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  align-items:center
+display:flex;
+gap:10px;
+flex-wrap:wrap;
+align-items:center
 }
 
 input,select,button{
-  font:inherit;
-  border-radius:9px;
-  border:1px solid #31577f;
-  padding:10px
+font:inherit;
+border-radius:9px;
+border:1px solid #31577f;
+padding:10px
 }
 
 input,select{
-  background:#071426;
-  color:#fff;
-  min-width:180px
+background:#071426;
+color:#fff;
+min-width:180px
 }
 
 button{
-  background:#123866;
-  color:#fff;
-  cursor:pointer
+background:#123866;
+color:#fff;
+cursor:pointer
 }
 
 button.primary{
-  background:#1769aa
+background:#1769aa
 }
 
 button.danger{
-  background:#7d2633
+background:#7d2633
 }
 
 .stats{
-  display:grid;
-  grid-template-columns:
-    repeat(auto-fit,minmax(150px,1fr));
-  gap:10px
+display:grid;
+grid-template-columns:
+repeat(auto-fit,minmax(150px,1fr));
+gap:10px
 }
 
 .stat{
-  background:#071426;
-  border-radius:10px;
-  padding:12px
+background:#071426;
+border-radius:10px;
+padding:12px
 }
 
 .num{
-  font-size:22px;
-  font-weight:bold;
-  margin-top:5px
+font-size:22px;
+font-weight:bold;
+margin-top:5px
 }
 
 #products{
-  display:grid;
-  grid-template-columns:
-    repeat(auto-fill,minmax(280px,1fr));
-  gap:12px
+display:grid;
+grid-template-columns:
+repeat(auto-fill,minmax(280px,1fr));
+gap:12px
 }
 
 .card{
-  background:#0b1f3a;
-  border:1px solid #1d416e;
-  border-radius:12px;
-  padding:13px
+background:#0b1f3a;
+border:1px solid #1d416e;
+border-radius:12px;
+padding:13px
 }
 
 .card h3{
-  font-size:15px;
-  margin:0 0 8px;
-  line-height:1.4
+font-size:15px;
+margin:0 0 8px;
+line-height:1.4
 }
 
 .price{
-  font-size:19px;
-  font-weight:bold
+font-size:19px;
+font-weight:bold
 }
 
 .badge{
-  display:inline-block;
-  padding:4px 7px;
-  border-radius:7px;
-  background:#123866;
-  color:#cfe6ff;
-  font-size:11px;
-  margin:2px
+display:inline-block;
+padding:4px 7px;
+border-radius:7px;
+background:#123866;
+color:#cfe6ff;
+font-size:11px;
+margin:2px
 }
 
 .actions{
-  display:flex;
-  gap:7px;
-  flex-wrap:wrap;
-  margin-top:10px
+display:flex;
+gap:7px;
+flex-wrap:wrap;
+margin-top:10px
 }
 
 .small{
-  font-size:12px;
-  color:#a9bdd3
+font-size:12px;
+color:#a9bdd3
 }
 
 .discount{
-  color:#ffd36b
+color:#ffd36b
+}
+
+.hidden{
+display:none
 }
 </style>
 </head>
@@ -3224,10 +2336,15 @@ button.danger{
 
 <header>
 <div class="wrap" style="padding:0">
-<h1>ABESHA STORE — لوحة الإدارة</h1>
+
+<h1>
+ABESHA STORE — لوحة الإدارة
+</h1>
+
 <div class="muted">
 إدارة المنتجات، النشر، الأسعار والعروض
 </div>
+
 </div>
 </header>
 
@@ -3346,1269 +2463,1177 @@ let data=[];
 let settings={};
 
 function esc(s){
-  return String(s??"")
-    .replace(
-      /[&<>"']/g,
-      m=>({
-        "&":"&amp;",
-        "<":"&lt;",
-        ">":"&gt;",
-        '"':"&quot;",
-        "'":"&#039;"
-      }[m])
-    );
+return String(s??"").replace(
+/[&<>"']/g,
+m=>({
+"&":"&amp;",
+"<":"&lt;",
+">":"&gt;",
+"\\":"&quot;",
+"'":"&#039;"
+}[m])
+);
 }
 
 function headers(){
-  return {
-    "Content-Type":
-      "application/json",
-
-    "x-admin-key":
-      key
-  };
+return {
+"Content-Type":"application/json",
+"x-admin-key":key
+}
 }
 
 function msg(t){
-  document.getElementById(
-    "msg"
-  ).textContent=t||"";
+document.getElementById(
+"msg"
+).textContent=t||"";
 }
 
-async function api(
-  url,
-  opts={}
-){
-  const r=
-    await fetch(
-      url,
-      {
-        ...opts,
+async function api(url,opts={}){
+const r=await fetch(
+url,
+{
+...opts,
+headers:{
+...headers(),
+...(opts.headers||{})
+}
+}
+);
 
-        headers:{
-          ...headers(),
-          ...(opts.headers||{})
-        }
-      }
-    );
+const j=await r.json()
+.catch(()=>({}));
 
-  const j=
-    await r.json()
-      .catch(
-        ()=>({})
-      );
+if(!r.ok)
+throw new Error(
+j.error||"حدث خطأ"
+);
 
-  if(!r.ok){
-    throw new Error(
-      j.error ||
-      "حدث خطأ"
-    );
-  }
-
-  return j;
+return j;
 }
 
 async function loadAll(){
 
-  key=
-    document
-      .getElementById(
-        "key"
-      )
-      .value
-      .trim();
+key=document
+.getElementById("key")
+.value
+.trim();
 
-  if(!key){
-    msg(
-      "أدخل مفتاح الإدارة."
-    );
-    return;
-  }
+if(!key){
+msg("أدخل مفتاح الإدارة.");
+return;
+}
 
-  try{
+try{
 
-    const j=
-      await api(
-        "/api/admin/catalog"
-      );
+const j=
+await api(
+"/api/admin/catalog"
+);
 
-    data=
-      j.products||[];
+data=j.products||[];
+settings=j.settings||{};
 
-    settings=
-      j.settings||{};
+document.getElementById(
+"mode"
+).value=
+settings.catalogMode||"all";
 
-    document
-      .getElementById(
-        "mode"
-      )
-      .value=
-      settings.catalogMode||
-      "all";
+updateStats();
+render();
 
-    updateStats();
-    render();
+msg(
+"تم تحميل الكتالوج."
+);
 
-    msg(
-      "تم تحميل الكتالوج."
-    );
+}catch(e){
 
-  }catch(e){
+msg(e.message);
 
-    msg(
-      e.message
-    );
-  }
+}
 }
 
 function updateStats(){
 
-  document
-    .getElementById(
-      "total"
-    )
-    .textContent=
-    data.length;
+document.getElementById(
+"total"
+).textContent=
+data.length;
 
-  document
-    .getElementById(
-      "published"
-    )
-    .textContent=
-    data.filter(
-      p=>p.published
-    ).length;
+document.getElementById(
+"published"
+).textContent=
+data.filter(
+p=>p.published
+).length;
 
-  document
-    .getElementById(
-      "hidden"
-    )
-    .textContent=
-    data.filter(
-      p=>!p.published
-    ).length;
+document.getElementById(
+"hidden"
+).textContent=
+data.filter(
+p=>!p.published
+).length;
 
-  document
-    .getElementById(
-      "discounts"
-    )
-    .textContent=
-    data.filter(
-      p=>
-        p.discount &&
-        p.discount.active!==false
-    ).length;
+document.getElementById(
+"discounts"
+).textContent=
+data.filter(
+p=>
+p.discount &&
+p.discount.active!==false
+).length;
+
 }
 
 function render(){
 
-  const q=
-    document
-      .getElementById(
-        "search"
-      )
-      .value
-      .trim()
-      .toLowerCase();
+const q=
+document
+.getElementById("search")
+.value
+.trim()
+.toLowerCase();
 
-  const type=
-    document
-      .getElementById(
-        "type"
-      )
-      .value;
+const type=
+document
+.getElementById("type")
+.value;
 
-  const list=
-    data.filter(
-      p=>
-        (
-          !q ||
-          String(
-            p.name||""
-          )
-          .toLowerCase()
-          .includes(q)
-        ) &&
-        (
-          !type ||
-          p.type===type
-        )
-    );
+const list=
+data.filter(
+p=>
+(!q||
+String(
+p.name||""
+)
+.toLowerCase()
+.includes(q))
+&&
+(!type||
+p.type===type)
+);
 
-  const box=
-    document.getElementById(
-      "products"
-    );
+const box=
+document.getElementById(
+"products"
+);
 
-  box.innerHTML=
-    list
-      .slice(0,500)
-      .map(p=>{
+box.innerHTML=
+list
+.slice(0,500)
+.map(
+p=>{
 
-        const d=
-          p.discount;
+const d=p.discount;
 
-        const price=
-          Number(
-            p.price_sdg||0
-          );
+const price=
+Number(
+p.price_sdg||0
+);
 
-        const state=
-          p.published
-            ? "منشور"
-            : "مخفي";
+const state=
+p.published
+?"منشور"
+:"مخفي";
 
-        return `
-<article class="card">
-
-<h3>${esc(p.name)}</h3>
-
-<div class="small">
-${esc(p.type)} · ${esc(p.id)}
-</div>
-
-<div class="price">
-${price.toLocaleString("en-US")}
-SDG
-</div>
-
-${
+return '<article class="card">'+
+'<h3>'+
+esc(p.name)+
+'</h3>'+
+'<div class="small">'+
+esc(p.type)+
+' · '+
+esc(p.id)+
+'</div>'+
+'<div class="price">'+
+price.toLocaleString("en-US")+
+' SDG</div>'+
+(
 d
-? `
-<div class="discount">
-عرض:
-${esc(d.label)}
- —
-${
+?
+'<div class="discount">'+
+'عرض: '+
+esc(d.label)+
+' — '+
+(
 d.type==="percent"
-? d.value+"%"
-: Number(d.value)
-    .toLocaleString("en-US")+" SDG"
-}
-</div>
-`
-: ""
-}
-
-<div>
-
-<span class="badge">
-${state}
-</span>
-
-${
-p.stock!==undefined &&
+?
+d.value+"%"
+:
+d.value.toLocaleString(
+"en-US"
+)+" SDG"
+)+
+'</div>'
+:
+''
+)+
+'<div>'+
+'<span class="badge">'+
+state+
+'</span>'+
+(
+p.stock!==undefined&&
 p.stock!==null
-? `
-<span class="badge">
-Stock: ${esc(p.stock)}
-</span>
-`
-: ""
-}
-
-</div>
-
-<div class="actions">
-
-<button
-class="primary"
-onclick='togglePublish(
-${JSON.stringify(p.id)},
-${!p.published}
-)'>
-${p.published
-  ? "إخفاء"
-  : "نشر"}
-</button>
-
-<button
-onclick='setDiscount(
-${JSON.stringify(p.id)}
-)'>
-عرض/خصم
-</button>
-
-${
+?
+'<span class="badge">Stock: '+
+esc(p.stock)+
+'</span>'
+:
+''
+)+
+'</div>'+
+'<div class="actions">'+
+'<button class="primary" onclick="togglePublish('+
+JSON.stringify(p.id)+
+','+
+(!p.published)+
+')">'+
+(
+p.published
+?"إخفاء"
+:"نشر"
+)+
+'</button>'+
+'<button onclick="setDiscount('+
+JSON.stringify(p.id)+
+')">'+
+'عرض/خصم'+
+'</button>'+
+(
 d
-? `
-<button
-class="danger"
-onclick='removeDiscount(
-${JSON.stringify(p.id)}
-)'>
-إزالة العرض
-</button>
-`
-: ""
+?
+'<button class="danger" onclick="removeDiscount('+
+JSON.stringify(p.id)+
+')">'+
+'إزالة العرض'+
+'</button>'
+:
+''
+)+
+'</div></article>';
+
 }
+)
+.join("");
 
-</div>
-
-</article>
-`;
-      })
-      .join("");
 }
 
 async function togglePublish(
-  id,
-  publish
+id,
+publish
 ){
 
-  try{
+try{
 
-    await api(
-      publish
-        ? "/api/admin/catalog/publish"
-        : "/api/admin/catalog/unpublish",
-      {
-        method:"POST",
+await api(
+publish
+?"/api/admin/catalog/publish"
+:"/api/admin/catalog/unpublish",
+{
+method:"POST",
+body:JSON.stringify({
+productId:id
+})
+}
+);
 
-        body:
-          JSON.stringify({
-            productId:id
-          })
-      }
-    );
+const p=
+data.find(
+x=>x.id===id
+);
 
-    const p=
-      data.find(
-        x=>x.id===id
-      );
+if(p)
+p.published=
+publish;
 
-    if(p){
-      p.published=
-        publish;
-    }
+updateStats();
+render();
 
-    updateStats();
-    render();
+msg(
+publish
+?"تم نشر المنتج."
+:"تم إخفاء المنتج."
+);
 
-    msg(
-      publish
-        ? "تم نشر المنتج."
-        : "تم إخفاء المنتج."
-    );
+}catch(e){
 
-  }catch(e){
+msg(e.message);
 
-    msg(
-      e.message
-    );
-  }
 }
 
-async function setDiscount(
-  id
-){
-
-  const type=
-    prompt(
-      "نوع الخصم: percent للنسبة أو fixed لمبلغ SDG",
-      "percent"
-    );
-
-  if(type===null){
-    return;
-  }
-
-  const normalizedType=
-    type.trim();
-
-  if(
-    ![
-      "percent",
-      "fixed"
-    ].includes(
-      normalizedType
-    )
-  ){
-    msg(
-      "نوع الخصم غير صحيح."
-    );
-    return;
-  }
-
-  const value=
-    prompt(
-      normalizedType==="percent"
-        ? "نسبة الخصم"
-        : "قيمة الخصم بالجنيه السوداني",
-      "10"
-    );
-
-  if(value===null){
-    return;
-  }
-
-  const n=
-    Number(value);
-
-  if(
-    !Number.isFinite(n) ||
-    n<=0
-  ){
-    msg(
-      "قيمة الخصم غير صحيحة."
-    );
-    return;
-  }
-
-  const label=
-    prompt(
-      "اسم العرض",
-      "عرض خاص"
-    );
-
-  if(label===null){
-    return;
-  }
-
-  try{
-
-    const j=
-      await api(
-        "/api/admin/catalog/discount",
-        {
-          method:"POST",
-
-          body:
-            JSON.stringify({
-              productId:id,
-
-              discount:{
-                type:
-                  normalizedType,
-
-                value:n,
-
-                label,
-
-                active:true
-              }
-            })
-        }
-      );
-
-    const p=
-      data.find(
-        x=>x.id===id
-      );
-
-    if(p){
-      p.discount=
-        j.discount;
-    }
-
-    updateStats();
-    render();
-
-    msg(
-      "تم حفظ العرض."
-    );
-
-  }catch(e){
-
-    msg(
-      e.message
-    );
-  }
 }
 
-async function removeDiscount(
-  id
+async function setDiscount(id){
+
+const type=
+prompt(
+"نوع الخصم: percent للنسبة أو fixed لمبلغ SDG",
+"percent"
+);
+
+if(type===null)
+return;
+
+if(
+!["percent","fixed"]
+.includes(type.trim())
 ){
 
-  try{
+msg(
+"نوع الخصم غير صحيح."
+);
 
-    await api(
-      "/api/admin/catalog/discount/"+
-      encodeURIComponent(id),
+return;
+}
 
-      {
-        method:
-          "DELETE"
-      }
-    );
+const value=
+prompt(
+type==="percent"
+?"نسبة الخصم"
+:"قيمة الخصم بالجنيه السوداني",
+"10"
+);
 
-    const p=
-      data.find(
-        x=>x.id===id
-      );
+if(value===null)
+return;
 
-    if(p){
-      p.discount=null;
-    }
+const n=Number(value);
 
-    updateStats();
-    render();
+if(
+!Number.isFinite(n)||
+n<=0
+){
 
-    msg(
-      "تمت إزالة العرض."
-    );
+msg(
+"قيمة الخصم غير صحيحة."
+);
 
-  }catch(e){
+return;
+}
 
-    msg(
-      e.message
-    );
-  }
+const label=
+prompt(
+"اسم العرض",
+"عرض خاص"
+);
+
+if(label===null)
+return;
+
+try{
+
+const j=
+await api(
+"/api/admin/catalog/discount",
+{
+method:"POST",
+body:JSON.stringify({
+productId:id,
+
+discount:{
+type,
+value:n,
+label,
+active:true
+}
+
+})
+}
+);
+
+const p=
+data.find(
+x=>x.id===id
+);
+
+if(p)
+p.discount=
+j.discount;
+
+updateStats();
+render();
+
+msg(
+"تم حفظ العرض."
+);
+
+}catch(e){
+
+msg(e.message);
+
+}
+
+}
+
+async function removeDiscount(id){
+
+try{
+
+await api(
+"/api/admin/catalog/discount/"+
+encodeURIComponent(id),
+{
+method:"DELETE"
+}
+);
+
+const p=
+data.find(
+x=>x.id===id
+);
+
+if(p)
+p.discount=null;
+
+updateStats();
+render();
+
+msg(
+"تمت إزالة العرض."
+);
+
+}catch(e){
+
+msg(e.message);
+
+}
+
 }
 
 async function changeMode(){
 
-  if(!key){
-    msg(
-      "أدخل ADMIN_KEY أولاً."
-    );
-    return;
-  }
+if(!key){
 
-  try{
+msg(
+"أدخل ADMIN_KEY أولاً."
+);
 
-    const mode=
-      document
-        .getElementById(
-          "mode"
-        )
-        .value;
+return;
+}
 
-    await api(
-      "/api/admin/catalog/mode",
-      {
-        method:
-          "POST",
+try{
 
-        body:
-          JSON.stringify({
-            mode
-          })
-      }
-    );
+const mode=
+document
+.getElementById("mode")
+.value;
 
-    settings.catalogMode=
-      mode;
+await api(
+"/api/admin/catalog/mode",
+{
+method:"POST",
+body:JSON.stringify({
+mode
+})
+}
+);
 
-    msg(
-      "تم تغيير طريقة عرض الكتالوج."
-    );
+settings.catalogMode=
+mode;
 
-  }catch(e){
+msg(
+"تم تغيير طريقة عرض الكتالوج."
+);
 
-    msg(
-      e.message
-    );
-  }
+}catch(e){
+
+msg(e.message);
+
+}
+
 }
 
 </script>
 
 </body>
-</html>
-`);
-  }
-);
+</html>`);
+});
 
 // ======================================================
 // الطلبات
 // ======================================================
 
-const ORDERS =
-  new Map();
+const ORDERS = new Map();
 
-function loadOrdersFromDisk(){
+function loadOrdersFromDisk() {
 
-  try{
+try {
 
-    if(
-      !fs.existsSync(
-        ORDERS_FILE
-      )
-    ){
-      return;
-    }
+if(
+!fs.existsSync(
+ORDERS_FILE
+)
+)
+return;
 
-    const parsed=
-      JSON.parse(
-        fs.readFileSync(
-          ORDERS_FILE,
-          "utf8"
-        )
-      );
+const parsed=
+JSON.parse(
+fs.readFileSync(
+ORDERS_FILE,
+"utf8"
+)
+);
 
-    if(
-      !Array.isArray(parsed)
-    ){
-      return;
-    }
+if(
+!Array.isArray(parsed)
+)
+return;
 
-    for(
-      const order of
-      parsed
-    ){
+for(
+const order of parsed
+){
 
-      if(
-        order?.orderNumber
-      ){
-        ORDERS.set(
-          order.orderNumber,
-          order
-        );
-      }
-    }
+if(
+order?.orderNumber
+)
+ORDERS.set(
+order.orderNumber,
+order
+);
 
-    console.log(
-      `[ORDERS] Loaded ${ORDERS.size} orders from disk`
-    );
+}
 
-  }catch(error){
+console.log(
+`[ORDERS] Loaded ${ORDERS.size} orders from disk`
+);
 
-    console.warn(
-      "[ORDERS] Could not load orders:",
-      error.message
-    );
-  }
+}catch(error){
+
+console.warn(
+"[ORDERS] Could not load orders:",
+error.message
+);
+
+}
+
 }
 
 function saveOrdersToDisk(){
 
-  try{
+try{
 
-    fs.writeFileSync(
-      ORDERS_FILE,
+fs.writeFileSync(
+ORDERS_FILE,
+JSON.stringify(
+Array.from(
+ORDERS.values()
+),
+null,
+2
+),
+"utf8"
+);
 
-      JSON.stringify(
-        Array.from(
-          ORDERS.values()
-        ),
-        null,
-        2
-      ),
+}catch(error){
 
-      "utf8"
-    );
+console.warn(
+"[ORDERS] Could not save orders:",
+error.message
+);
 
-  }catch(error){
+}
 
-    console.warn(
-      "[ORDERS] Could not save orders:",
-      error.message
-    );
-  }
 }
 
 function customerKey(
-  customer={}
+customer={}
 ){
 
-  const raw=
-    String(
-      customer.phone ||
-      customer.email ||
-      ""
-    )
-      .trim()
-      .toLowerCase();
+const raw=
+String(
+customer.phone||
+customer.email||
+""
+)
+.trim()
+.toLowerCase();
 
-  if(!raw){
-    return null;
-  }
+if(!raw)
+return null;
 
-  return crypto
-    .createHash(
-      "sha256"
-    )
-    .update(raw)
-    .digest("hex")
-    .slice(0,24);
+return crypto
+.createHash("sha256")
+.update(raw)
+.digest("hex")
+.slice(0,24);
+
 }
 
 loadOrdersFromDisk();
 
 function generateOrderNumber(){
 
-  const part1=
-    Math.floor(
-      100000 +
-      Math.random() *
-      900000
-    );
+const part1=
+Math.floor(
+100000+
+Math.random()*
+900000
+);
 
-  const part2=
-    Math.floor(
-      100000 +
-      Math.random() *
-      900000
-    );
+const part2=
+Math.floor(
+100000+
+Math.random()*
+900000
+);
 
-  return `AB-${part1}-${part2}`;
+return `AB-${part1}-${part2}`;
+
 }
 
-// ======================================================
-// إنشاء طلب
-// ======================================================
-
 app.post(
-  "/api/orders",
-  (req,res)=>{
-    try{
+"/api/orders",
+(req,res)=>{
 
-      const {
-        customer,
-        items,
-        paymentMethod,
-        total
-      } = req.body;
+try{
 
-      if(
-        !customer ||
-        typeof customer !==
-          "object"
-      ){
-        return res.status(
-          400
-        ).json({
-          ok:false,
-          error:
-            "customer is required"
-        });
-      }
+const {
+customer,
+items,
+paymentMethod,
+total
+}=req.body;
 
-      if(
-        !Array.isArray(items) ||
-        items.length===0
-      ){
-        return res.status(
-          400
-        ).json({
-          ok:false,
-          error:
-            "items are required"
-        });
-      }
+if(
+!customer||
+typeof customer!=="object"
+){
 
-      if(!paymentMethod){
-        return res.status(
-          400
-        ).json({
-          ok:false,
-          error:
-            "paymentMethod is required"
-        });
-      }
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"customer is required"
+});
 
-      const amount=
-        Number(total);
+}
 
-      if(
-        !Number.isFinite(amount) ||
-        amount<=0
-      ){
-        return res.status(
-          400
-        ).json({
-          ok:false,
-          error:
-            "Invalid total"
-        });
-      }
+if(
+!Array.isArray(items)||
+items.length===0
+){
 
-      const orderNumber=
-        generateOrderNumber();
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"items are required"
+});
 
-      const now=
-        new Date().toISOString();
+}
 
-      const order={
-        orderNumber,
+if(!paymentMethod){
 
-        customerKey:
-          customerKey(
-            customer
-          ),
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"paymentMethod is required"
+});
 
-        customer:{
-          name:
-            String(
-              customer.name||""
-            ).trim(),
+}
 
-          phone:
-            String(
-              customer.phone||""
-            ).trim(),
+const amount=
+Number(total);
 
-          email:
-            String(
-              customer.email||""
-            ).trim()
-        },
+if(
+!Number.isFinite(amount)||
+amount<=0
+){
 
-        items:
-          items.map(
-            item=>({
-              productId:
-                String(
-                  item.productId||
-                  ""
-                ),
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"Invalid total"
+});
 
-              name:
-                String(
-                  item.name||
-                  ""
-                ),
+}
 
-              quantity:
-                item.quantity||
-                1,
+const orderNumber=
+generateOrderNumber();
 
-              price:
-                Number(
-                  item.price
-                )||0,
+const order={
 
-              fields:
-                item.fields||
-                {}
-            })
-          ),
+orderNumber,
 
-        payment:{
-          method:
-            String(
-              paymentMethod
-            ),
+customer:{
+name:
+String(
+customer.name||""
+).trim(),
 
-          status:
-            "PENDING",
+phone:
+String(
+customer.phone||""
+).trim(),
 
-          transactionId:
-            null
-        },
+email:
+String(
+customer.email||""
+).trim()
+},
 
-        total:
-          amount,
+items:
+items.map(
+item=>({
 
-        status:
-          "PAYMENT_PENDING",
+productId:
+String(
+item.productId||""
+),
 
-        createdAt:
-          now,
+name:
+String(
+item.name||""
+),
 
-        updatedAt:
-          now
-      };
+quantity:
+item.quantity||"",
 
-      ORDERS.set(
-        orderNumber,
-        order
-      );
+price:
+Number(
+item.price
+)||0,
 
-      saveOrdersToDisk();
+fields:
+item.fields||{}
 
-      console.log(
-        `[ORDER CREATED] ${orderNumber} - ${amount} SDG - ${paymentMethod}`
-      );
+})
+),
 
-      res.status(
-        201
-      ).json({
-        ok:true,
+payment:{
+method:
+String(
+paymentMethod
+),
 
-        order:{
-          orderNumber:
-            order.orderNumber,
+status:
+"PENDING",
 
-          status:
-            order.status,
+transactionId:null
+},
 
-          total:
-            order.total,
+total:amount,
 
-          paymentMethod:
-            order.payment.method,
+status:
+"PAYMENT_PENDING",
 
-          createdAt:
-            order.createdAt
-        }
-      });
+createdAt:
+new Date().toISOString(),
 
-    }catch(error){
+updatedAt:
+new Date().toISOString()
 
-      console.error(
-        "Create order error:",
-        error
-      );
+};
 
-      res.status(
-        500
-      ).json({
-        ok:false,
-        error:
-          "Failed to create order"
-      });
-    }
-  }
+ORDERS.set(
+orderNumber,
+order
 );
 
-// ======================================================
-// طلب محدد
-// ======================================================
+console.log(
+`[ORDER CREATED] ${orderNumber} - ${amount} SDG - ${paymentMethod}`
+);
+
+res
+.status(201)
+.json({
+ok:true,
+
+order:{
+orderNumber:
+order.orderNumber,
+
+status:
+order.status,
+
+total:
+order.total,
+
+paymentMethod:
+order.payment.method,
+
+createdAt:
+order.createdAt
+}
+
+});
+
+}catch(error){
+
+console.error(
+"Create order error:",
+error
+);
+
+res
+.status(500)
+.json({
+ok:false,
+error:
+"Failed to create order"
+});
+
+}
+
+}
+);
 
 app.get(
-  "/api/orders/:orderNumber",
-  (req,res)=>{
+"/api/orders/:orderNumber",
+(req,res)=>{
 
-    const order=
-      ORDERS.get(
-        req.params.orderNumber
-      );
-
-    if(!order){
-      return res.status(
-        404
-      ).json({
-        ok:false,
-        error:
-          "Order not found"
-      });
-    }
-
-    res.json({
-      ok:true,
-      order
-    });
-  }
+const order=
+ORDERS.get(
+req.params.orderNumber
 );
 
-// ======================================================
-// طلبات العميل
-// ======================================================
+if(!order){
+
+return res
+.status(404)
+.json({
+ok:false,
+error:
+"Order not found"
+});
+
+}
+
+res.json({
+ok:true,
+order
+});
+
+}
+);
 
 app.get(
-  "/api/customer/orders",
-  (req,res)=>{
+"/api/customer/orders",
+(req,res)=>{
 
-    const phone=
-      String(
-        req.query.phone||
-        ""
-      ).trim();
+const phone=
+String(
+req.query.phone||""
+).trim();
 
-    const email=
-      String(
-        req.query.email||
-        ""
-      ).trim();
+const email=
+String(
+req.query.email||""
+).trim();
 
-    const key=
-      customerKey({
-        phone,
-        email
-      });
+const key=
+customerKey({
+phone,
+email
+});
 
-    if(!key){
-      return res.status(
-        400
-      ).json({
-        ok:false,
-        error:
-          "phone or email is required"
-      });
-    }
+if(!key){
 
-    const customerOrders=
-      Array.from(
-        ORDERS.values()
-      )
-      .filter(
-        order =>
-          order.customerKey===
-          key
-      )
-      .sort(
-        (a,b)=>
-          new Date(
-            b.createdAt
-          ) -
-          new Date(
-            a.createdAt
-          )
-      )
-      .map(
-        order=>({
-          orderNumber:
-            order.orderNumber,
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"phone or email is required"
+});
 
-          total:
-            order.total,
+}
 
-          status:
-            order.status,
+const customerOrders=
+Array.from(
+ORDERS.values()
+)
+.filter(
+order =>
+order.customerKey===key
+)
+.sort(
+(a,b)=>
+new Date(b.createdAt)-
+new Date(a.createdAt)
+)
+.map(
+order=>({
 
-          paymentMethod:
-            order.payment?.method ||
-            null,
+orderNumber:
+order.orderNumber,
 
-          createdAt:
-            order.createdAt,
+total:
+order.total,
 
-          items:
-            order.items
-        })
-      );
+status:
+order.status,
 
-    res.json({
-      ok:true,
+paymentMethod:
+order.payment?.method||
+null,
 
-      total:
-        customerOrders.length,
+createdAt:
+order.createdAt,
 
-      orders:
-        customerOrders
-    });
-  }
+items:
+order.items
+
+})
 );
 
-// ======================================================
-// إعادة الطلب
-// ======================================================
+res.json({
+ok:true,
+
+total:
+customerOrders.length,
+
+orders:
+customerOrders
+});
+
+}
+);
 
 app.post(
-  "/api/customer/reorder",
-  async (req,res)=>{
-    try{
+"/api/customer/reorder",
+async (req,res)=>{
 
-      const orderNumber=
-        String(
-          req.body?.orderNumber||
-          ""
-        ).trim();
+try{
 
-      const order=
-        ORDERS.get(
-          orderNumber
-        );
+const orderNumber=
+String(
+req.body?.orderNumber||""
+).trim();
 
-      if(!order){
-        return res.status(
-          404
-        ).json({
-          ok:false,
-          error:
-            "Order not found"
-        });
-      }
-
-      const catalog=
-        await getPricedCatalog();
-
-      const byId=
-        new Map(
-          catalog.map(
-            product=>[
-              String(
-                product.id
-              ),
-              product
-            ]
-          )
-        );
-
-      const items=
-        order.items
-          .map(
-            item =>
-              byId.get(
-                String(
-                  item.productId
-                )
-              )
-          )
-          .filter(
-            product =>
-              product &&
-              Number(
-                product.price_sdg
-              )>0
-          )
-          .map(
-            product=>{
-              const publicProduct=
-                enrichProductForStore(
-                  product
-                );
-
-              return {
-                productId:
-                  publicProduct.id,
-
-                name:
-                  publicProduct.name,
-
-                price:
-                  publicProduct.price_sdg,
-
-                quantity:
-                  1,
-
-                fields:
-                  publicProduct.fields ||
-                  {}
-              };
-            }
-          );
-
-      res.json({
-        ok:true,
-
-        sourceOrderNumber:
-          orderNumber,
-
-        total:
-          items.reduce(
-            (sum,item)=>
-              sum+
-              Number(
-                item.price||0
-              ),
-            0
-          ),
-
-        items
-      });
-
-    }catch(error){
-
-      res.status(
-        500
-      ).json({
-        ok:false,
-        error:
-          error.message
-      });
-    }
-  }
+const order=
+ORDERS.get(
+orderNumber
 );
 
-// ======================================================
-// Admin Orders
-// ======================================================
+if(!order){
+
+return res
+.status(404)
+.json({
+ok:false,
+error:
+"Order not found"
+});
+
+}
+
+const catalog=
+await getPricedCatalog();
+
+const byId=
+new Map(
+catalog.map(
+product =>
+[
+String(product.id),
+product
+]
+)
+);
+
+const items=
+order.items
+.map(
+item =>
+byId.get(
+String(
+item.productId
+)
+)
+)
+.filter(
+product =>
+product&&
+Number(
+product.price_sdg
+)>0
+)
+.map(
+product=>{
+
+const publicProduct=
+enrichProductForStore(
+product
+);
+
+return {
+
+productId:
+publicProduct.id,
+
+name:
+publicProduct.name,
+
+price:
+publicProduct.price_sdg,
+
+quantity:1,
+
+fields:
+publicProduct.fields||{}
+
+};
+
+}
+);
+
+res.json({
+
+ok:true,
+
+sourceOrderNumber:
+orderNumber,
+
+total:
+items.reduce(
+(sum,item)=>
+sum+
+Number(
+item.price||0
+),
+0
+),
+
+items
+
+});
+
+}catch(error){
+
+res
+.status(500)
+.json({
+ok:false,
+error:
+error.message
+});
+
+}
+
+}
+);
 
 app.get(
-  "/api/admin/orders",
-  requireAdmin,
-  (req,res)=>{
+"/api/admin/orders",
+requireAdmin,
+(req,res)=>{
 
-    const list=
-      Array.from(
-        ORDERS.values()
-      )
-      .sort(
-        (a,b)=>
-          new Date(
-            b.createdAt
-          ) -
-          new Date(
-            a.createdAt
-          )
-      );
-
-    res.json({
-      ok:true,
-
-      total:
-        list.length,
-
-      orders:
-        list
-    });
-  }
+const list=
+Array.from(
+ORDERS.values()
+)
+.sort(
+(a,b)=>
+new Date(b.createdAt)-
+new Date(a.createdAt)
 );
 
-// ======================================================
-// Confirm Payment
-// ======================================================
+res.json({
+
+ok:true,
+
+total:
+list.length,
+
+orders:
+list
+
+});
+
+}
+);
 
 app.post(
-  "/api/admin/orders/:orderNumber/confirm-payment",
-  requireAdmin,
-  (req,res)=>{
+"/api/admin/orders/:orderNumber/confirm-payment",
+requireAdmin,
+(req,res)=>{
 
-    const order=
-      ORDERS.get(
-        req.params.orderNumber
-      );
+const order=
+ORDERS.get(
+req.params.orderNumber
+);
 
-    if(!order){
-      return res.status(
-        404
-      ).json({
-        ok:false,
-        error:
-          "Order not found"
-      });
-    }
+if(!order){
 
-    if(
-      order.status !==
-      "PAYMENT_PENDING"
-    ){
-      return res.status(
-        409
-      ).json({
-        ok:false,
-        error:
-          `Order cannot be confirmed from status ${order.status}`
-      });
-    }
+return res
+.status(404)
+.json({
+ok:false,
+error:
+"Order not found"
+});
 
-    const transactionId=
-      String(
-        req.body?.transactionId||
-        ""
-      ).trim();
+}
 
-    if(!transactionId){
-      return res.status(
-        400
-      ).json({
-        ok:false,
-        error:
-          "transactionId is required"
-      });
-    }
+if(
+order.status!==
+"PAYMENT_PENDING"
+){
 
-    order.payment.transactionId=
-      transactionId;
+return res
+.status(409)
+.json({
+ok:false,
+error:
+`Order cannot be confirmed from status ${order.status}`
+});
 
-    order.payment.status=
-      "CONFIRMED";
+}
 
-    order.status=
-      "PAYMENT_CONFIRMED";
+const transactionId=
+String(
+req.body?.transactionId||
+""
+).trim();
 
-    order.updatedAt=
-      new Date().toISOString();
+if(!transactionId){
 
-    ORDERS.set(
-      order.orderNumber,
-      order
-    );
+return res
+.status(400)
+.json({
+ok:false,
+error:
+"transactionId is required"
+});
 
-    saveOrdersToDisk();
+}
 
-    console.log(
-      `[PAYMENT CONFIRMED] ${order.orderNumber} - ${transactionId}`
-    );
+order.payment.transactionId=
+transactionId;
 
-    res.json({
-      ok:true,
-      order
-    });
-  }
+order.payment.status=
+"CONFIRMED";
+
+order.status=
+"PAYMENT_CONFIRMED";
+
+order.updatedAt=
+new Date().toISOString();
+
+ORDERS.set(
+order.orderNumber,
+order
+);
+
+saveOrdersToDisk();
+
+console.log(
+`[PAYMENT CONFIRMED] ${order.orderNumber} - ${transactionId}`
+);
+
+res.json({
+ok:true,
+order
+});
+
+}
 );
 
 // ======================================================
@@ -4616,35 +3641,34 @@ app.post(
 // ======================================================
 
 app.get(
-  "/",
-  (req,res)=>{
-    res.sendFile(
-      path.join(
-        __dirname,
-        "public",
-        "index.html"
-      )
-    );
-  }
+"/",
+(req,res)=>{
+
+res.sendFile(
+path.join(
+__dirname,
+"public",
+"index.html"
+)
+);
+
+}
 );
 
 // ======================================================
-// تشغيل السيرفر
+// تشغيل
 // ======================================================
 
 app.listen(
-  PORT,
-  ()=>{
-    console.log(
-      `ABESHA STORE running on port ${PORT}`
-    );
+PORT,
+()=>{
+console.log(
+`ABESHA STORE running on port ${PORT}`
+);
 
-    console.log(
-      `Pricing USD → SDG: ${USD_TO_SDG}`
-    );
+console.log(
+`Pricing USD → SDG: ${USD_TO_SDG}`
+);
 
-    console.log(
-      `Fazer API: ${FAZER_API}`
-    );
-  }
+}
 );
