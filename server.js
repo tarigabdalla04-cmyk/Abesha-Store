@@ -27,6 +27,7 @@ const STORE_SETTINGS_FILE = path.join(__dirname, "store-settings.json");
 const ORDERS_FILE = path.join(__dirname, "orders.json");
 const STORE_SETTINGS_VERSION = 1;
 
+
 const PRICE_OVERRIDES = {
   pubg_mobile_auto: {
     "60": 7950,
@@ -129,14 +130,29 @@ async function fazerGet(endpoint, timeoutMs = 30000) {
 async function getAllCategories(endpoint) {
   const items = [];
   let cursor = null;
+  const baseEndpoint = endpoint.startsWith("/")
+    ? endpoint
+    : `/${endpoint}`;
 
+  // Fazer v2 uses cursor pagination for the family catalogs.
+  // Always normalize the path so /api/v2 + /topups becomes /api/v2/topups.
+  // Use the documented cursor + limit parameters.
   for (let page = 0; page < 100; page++) {
-    const query = cursor
-      ? `?cursor=${encodeURIComponent(cursor)}`
-      : "";
+    const params = new URLSearchParams();
+    params.set("limit", "200");
 
-    const data = await fazerGet(`${endpoint}${query}`);
-    const pageItems = getArray(data, ["items", "categories", "games"]);
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const data = await fazerGet(
+      `${baseEndpoint}?${params.toString()}`
+    );
+
+    const pageItems = getArray(
+      data,
+      ["items", "categories", "games"]
+    );
 
     if (pageItems.length) {
       items.push(...pageItems);
@@ -234,6 +250,10 @@ function calculateSalePrice(priceUsd) {
   return roundCommercialPrice(sale);
 }
 
+// The current storefront calculates a fallback price from `price_usd`.
+// Keep the Fazer source price in `source_price_usd`, while exposing a
+// compatibility USD value that makes the existing storefront display the
+// server-calculated SDG selling price without requiring another index.html edit.
 function frontendCompatibleUsd(saleSdg) {
   const sale = Number(saleSdg);
 
@@ -280,6 +300,7 @@ function offerPriceUsd(offer) {
 
   for (const value of candidates) {
     const n = Number(value);
+
     if (Number.isFinite(n) && n > 0) {
       return n;
     }
@@ -313,6 +334,7 @@ function offerUniqueId(offer, index) {
   );
 }
 
+
 // ======================================================
 // إعدادات المتجر — النشر والعروض
 // ======================================================
@@ -337,7 +359,9 @@ function loadStoreSettings() {
       return settings;
     }
 
-    const parsed = JSON.parse(fs.readFileSync(STORE_SETTINGS_FILE, "utf8"));
+    const parsed = JSON.parse(
+      fs.readFileSync(STORE_SETTINGS_FILE, "utf8")
+    );
 
     return {
       ...cloneDefaultStoreSettings(),
@@ -384,19 +408,33 @@ let storeSettings = loadStoreSettings();
 function normalizeDiscount(raw) {
   if (!raw || typeof raw !== "object") return null;
 
-  const type = raw.type === "fixed" ? "fixed" : "percent";
+  const type = raw.type === "fixed"
+    ? "fixed"
+    : "percent";
+
   const value = Number(raw.value);
+
   const startsAt = raw.startsAt
     ? new Date(raw.startsAt).toISOString()
     : null;
+
   const endsAt = raw.endsAt
     ? new Date(raw.endsAt).toISOString()
     : null;
+
   const active = raw.active !== false;
 
-  if (!Number.isFinite(value) || value <= 0) return null;
-  if (type === "percent" && value >= 100) return null;
-  if (type === "fixed" && value >= 100000000) return null;
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+
+  if (type === "percent" && value >= 100) {
+    return null;
+  }
+
+  if (type === "fixed" && value >= 100000000) {
+    return null;
+  }
 
   return {
     type,
@@ -404,14 +442,16 @@ function normalizeDiscount(raw) {
     startsAt,
     endsAt,
     active,
-    label: String(raw.label || "عرض خاص")
-      .trim()
-      .slice(0, 100)
+    label: String(
+      raw.label || "عرض خاص"
+    ).trim().slice(0, 100)
   };
 }
 
 function isDiscountActive(discount) {
-  if (!discount || discount.active === false) return false;
+  if (!discount || discount.active === false) {
+    return false;
+  }
 
   const now = Date.now();
 
@@ -454,10 +494,14 @@ function applyDiscount(basePrice, discount) {
   if (discount.type === "fixed") {
     sale = base - Number(discount.value);
   } else {
-    sale = base * (1 - Number(discount.value) / 100);
+    sale =
+      base *
+      (1 - Number(discount.value) / 100);
   }
 
-  sale = roundCommercialPrice(Math.max(100, sale));
+  sale = roundCommercialPrice(
+    Math.max(100, sale)
+  );
 
   if (!sale || sale >= base) {
     return {
@@ -490,14 +534,23 @@ function productVisibility(product) {
 
 function enrichProductForStore(product) {
   const basePrice = Number(product.price_sdg);
-  const discount = storeSettings.discounts[String(product.id)];
-  const pricing = applyDiscount(basePrice, discount);
+
+  const discount =
+    storeSettings.discounts[String(product.id)];
+
+  const pricing = applyDiscount(
+    basePrice,
+    discount
+  );
 
   const result = {
     ...product,
     price_sdg: pricing.price,
-    price_usd: frontendCompatibleUsd(pricing.price),
-    original_price_sdg: pricing.originalPrice,
+    price_usd: frontendCompatibleUsd(
+      pricing.price
+    ),
+    original_price_sdg:
+      pricing.originalPrice,
     discount: pricing.discount
   };
 
@@ -510,7 +563,9 @@ function enrichProductForStore(product) {
 
 function getAdminProduct(product) {
   const discount =
-    storeSettings.discounts[String(product.id)] || null;
+    storeSettings.discounts[
+      String(product.id)
+    ] || null;
 
   return {
     ...product,
@@ -522,12 +577,17 @@ function getAdminProduct(product) {
 function getPublicProducts(products) {
   return products
     .filter(productVisibility)
-    .filter(product => Number(product.price_sdg) > 0)
+    .filter(
+      product =>
+        Number(product.price_sdg) > 0
+    )
     .map(enrichProductForStore);
 }
 
 function saveStoreSettingsNow() {
-  storeSettings.version = STORE_SETTINGS_VERSION;
+  storeSettings.version =
+    STORE_SETTINGS_VERSION;
+
   saveStoreSettings(storeSettings);
 }
 
@@ -554,8 +614,11 @@ function loadPriceCacheFromDisk() {
       Array.isArray(parsed.products) &&
       Number.isFinite(parsed.builtAt)
     ) {
-      pricedCatalogCache = parsed.products;
-      pricedCatalogBuiltAt = parsed.builtAt;
+      pricedCatalogCache =
+        parsed.products;
+
+      pricedCatalogBuiltAt =
+        parsed.builtAt;
 
       console.log(
         `[PRICE CACHE] Loaded ${pricedCatalogCache.length} products from disk`
@@ -597,7 +660,9 @@ function cacheIsFresh() {
   return (
     Array.isArray(pricedCatalogCache) &&
     pricedCatalogCache.length > 0 &&
-    Date.now() - pricedCatalogBuiltAt < CACHE_TTL_MS
+    Date.now() -
+      pricedCatalogBuiltAt <
+      CACHE_TTL_MS
   );
 }
 
@@ -610,7 +675,9 @@ async function mapWithConcurrency(
   worker,
   concurrency = 6
 ) {
-  const results = new Array(items.length);
+  const results =
+    new Array(items.length);
+
   let nextIndex = 0;
 
   async function runner() {
@@ -622,10 +689,11 @@ async function mapWithConcurrency(
       }
 
       try {
-        results[index] = await worker(
-          items[index],
-          index
-        );
+        results[index] =
+          await worker(
+            items[index],
+            index
+          );
       } catch (error) {
         results[index] = {
           __error: true,
@@ -660,7 +728,10 @@ async function getTopupOffers(categoryId) {
     30000
   );
 
-  return getArray(data, ["items", "offers"]);
+  return getArray(
+    data,
+    ["items", "offers"]
+  );
 }
 
 async function getGiftcardOffers(categoryId) {
@@ -714,19 +785,28 @@ async function buildPricedCatalog() {
       ? familyResults[2].value
       : [];
 
-  if (familyResults[0].status === "rejected") {
+  if (
+    familyResults[0].status ===
+    "rejected"
+  ) {
     console.warn(
       `[PRICE] Topups catalog unavailable: ${familyResults[0].reason?.message || familyResults[0].reason}`
     );
   }
 
-  if (familyResults[1].status === "rejected") {
+  if (
+    familyResults[1].status ===
+    "rejected"
+  ) {
     console.warn(
       `[PRICE] Gift Cards catalog unavailable: ${familyResults[1].reason?.message || familyResults[1].reason}`
     );
   }
 
-  if (familyResults[2].status === "rejected") {
+  if (
+    familyResults[2].status ===
+    "rejected"
+  ) {
     console.warn(
       `[PRICE] Game Keys catalog unavailable: ${familyResults[2].reason?.message || familyResults[2].reason}`
     );
@@ -742,21 +822,25 @@ async function buildPricedCatalog() {
     await mapWithConcurrency(
       topups,
       async category => {
-        const categoryId = String(
-          category.category_id ||
-          category.id ||
-          ""
-        );
+        const categoryId =
+          String(
+            category.category_id ||
+            category.id ||
+            ""
+          );
 
-        const categoryName = String(
-          category.name ||
-          category.title ||
-          categoryId
-        );
+        const categoryName =
+          String(
+            category.name ||
+            category.title ||
+            categoryId
+          );
 
         try {
           const offers =
-            await getTopupOffers(categoryId);
+            await getTopupOffers(
+              categoryId
+            );
 
           return offers.map(
             (offer, index) => {
@@ -764,7 +848,9 @@ async function buildPricedCatalog() {
                 offerLabel(offer);
 
               const priceUsd =
-                offerPriceUsd(offer);
+                offerPriceUsd(
+                  offer
+                );
 
               const forcedPrice =
                 getOverride(
@@ -780,21 +866,21 @@ async function buildPricedCatalog() {
 
               return {
                 id:
-                  `${categoryId}__offer__${offerUniqueId(
-                    offer,
-                    index
-                  )}`,
+                  `${categoryId}__offer__${offerUniqueId(offer, index)}`,
 
-                category_id: categoryId,
+                category_id:
+                  categoryId,
 
                 name:
                   label === "عرض"
                     ? categoryName
                     : `${categoryName} — ${label}`,
 
-                base_name: categoryName,
+                base_name:
+                  categoryName,
 
-                type: "topup",
+                type:
+                  "topup",
 
                 note:
                   category.note || "",
@@ -838,7 +924,8 @@ async function buildPricedCatalog() {
                     ? "manual_override"
                     : "automatic",
 
-                offer: offer
+                offer:
+                  offer
               };
             }
           );
@@ -853,11 +940,14 @@ async function buildPricedCatalog() {
               category_id: categoryId,
               name: categoryName,
               type: "topup",
-              note: category.note || "",
-              fields: category.fields || [],
+              note:
+                category.note || "",
+              fields:
+                category.fields || [],
               price_usd: null,
               price_sdg: null,
-              pricing_mode: "unavailable"
+              pricing_mode:
+                "unavailable"
             }
           ];
         }
@@ -865,7 +955,9 @@ async function buildPricedCatalog() {
       6
     );
 
-  for (const result of topupResults) {
+  for (
+    const result of topupResults
+  ) {
     if (Array.isArray(result)) {
       products.push(...result);
     }
@@ -879,17 +971,19 @@ async function buildPricedCatalog() {
     await mapWithConcurrency(
       giftcards,
       async category => {
-        const categoryId = String(
-          category.category_id ||
-          category.id ||
-          ""
-        );
+        const categoryId =
+          String(
+            category.category_id ||
+            category.id ||
+            ""
+          );
 
-        const categoryName = String(
-          category.name ||
-          category.title ||
-          categoryId
-        );
+        const categoryName =
+          String(
+            category.name ||
+            category.title ||
+            categoryId
+          );
 
         try {
           const offers =
@@ -903,7 +997,9 @@ async function buildPricedCatalog() {
                 offerLabel(offer);
 
               const priceUsd =
-                offerPriceUsd(offer);
+                offerPriceUsd(
+                  offer
+                );
 
               const calculatedPrice =
                 calculateSalePrice(
@@ -912,10 +1008,7 @@ async function buildPricedCatalog() {
 
               return {
                 id:
-                  `${categoryId}__card__${offerUniqueId(
-                    offer,
-                    index
-                  )}`,
+                  `${categoryId}__card__${offerUniqueId(offer, index)}`,
 
                 category_id:
                   categoryId,
@@ -928,7 +1021,8 @@ async function buildPricedCatalog() {
                 base_name:
                   categoryName,
 
-                type: "gift_card",
+                type:
+                  "gift_card",
 
                 note:
                   category.note || "",
@@ -970,12 +1064,15 @@ async function buildPricedCatalog() {
                   offer?.stock ?? null,
 
                 min_order_quantity:
-                  offer?.min_order_quantity ?? 1,
+                  offer?.min_order_quantity ??
+                  1,
 
                 max_order_quantity:
-                  offer?.max_order_quantity ?? null,
+                  offer?.max_order_quantity ??
+                  null,
 
-                offer: offer
+                offer:
+                  offer
               };
             }
           );
@@ -990,11 +1087,14 @@ async function buildPricedCatalog() {
               category_id: categoryId,
               name: categoryName,
               type: "gift_card",
-              note: category.note || "",
-              fields: category.fields || [],
+              note:
+                category.note || "",
+              fields:
+                category.fields || [],
               price_usd: null,
               price_sdg: null,
-              pricing_mode: "unavailable"
+              pricing_mode:
+                "unavailable"
             }
           ];
         }
@@ -1002,7 +1102,9 @@ async function buildPricedCatalog() {
       6
     );
 
-  for (const result of giftcardResults) {
+  for (
+    const result of giftcardResults
+  ) {
     if (Array.isArray(result)) {
       products.push(...result);
     }
@@ -1016,18 +1118,20 @@ async function buildPricedCatalog() {
     await mapWithConcurrency(
       gamekeys,
       async game => {
-        const gameId = String(
-          game.game_id ||
-          game.category_id ||
-          game.id ||
-          ""
-        );
+        const gameId =
+          String(
+            game.game_id ||
+            game.category_id ||
+            game.id ||
+            ""
+          );
 
-        const gameName = String(
-          game.name ||
-          game.GameName ||
-          gameId
-        );
+        const gameName =
+          String(
+            game.name ||
+            game.GameName ||
+            gameId
+          );
 
         try {
           const keys =
@@ -1038,7 +1142,9 @@ async function buildPricedCatalog() {
           return keys.map(
             (key, index) => {
               const priceUsd =
-                offerPriceUsd(key);
+                offerPriceUsd(
+                  key
+                );
 
               const calculatedPrice =
                 calculateSalePrice(
@@ -1050,21 +1156,21 @@ async function buildPricedCatalog() {
 
               return {
                 id:
-                  `${gameId}__key__${offerUniqueId(
-                    key,
-                    index
-                  )}`,
+                  `${gameId}__key__${offerUniqueId(key, index)}`,
 
-                category_id: gameId,
+                category_id:
+                  gameId,
 
                 name:
                   label === "عرض"
                     ? gameName
                     : `${gameName} — ${label}`,
 
-                base_name: gameName,
+                base_name:
+                  gameName,
 
-                type: "game_key",
+                type:
+                  "game_key",
 
                 platform:
                   game.platform || "",
@@ -1110,12 +1216,15 @@ async function buildPricedCatalog() {
                   key?.stock ?? null,
 
                 min_order_quantity:
-                  key?.min_order_quantity ?? 1,
+                  key?.min_order_quantity ??
+                  1,
 
                 max_order_quantity:
-                  key?.max_order_quantity ?? null,
+                  key?.max_order_quantity ??
+                  null,
 
-                offer: key
+                offer:
+                  key
               };
             }
           );
@@ -1130,14 +1239,17 @@ async function buildPricedCatalog() {
               category_id: gameId,
               name: gameName,
               type: "game_key",
-              platform: game.platform || "",
-              region: game.region || "",
+              platform:
+                game.platform || "",
+              region:
+                game.region || "",
               region_restriction:
                 game.region_restriction ||
                 false,
               price_usd: null,
               price_sdg: null,
-              pricing_mode: "unavailable"
+              pricing_mode:
+                "unavailable"
             }
           ];
         }
@@ -1145,7 +1257,9 @@ async function buildPricedCatalog() {
       6
     );
 
-  for (const result of gameKeyResults) {
+  for (
+    const result of gameKeyResults
+  ) {
     if (Array.isArray(result)) {
       products.push(...result);
     }
@@ -1155,19 +1269,28 @@ async function buildPricedCatalog() {
     products.filter(
       product =>
         Number.isFinite(
-          Number(product.price_sdg)
+          Number(
+            product.price_sdg
+          )
         ) &&
-        Number(product.price_sdg) > 0
+        Number(
+          product.price_sdg
+        ) > 0
     ).length;
 
   console.log(
     `[PRICE CACHE] Built ${products.length} catalog entries; ${usablePrices} have prices`
   );
 
-  pricedCatalogCache = products;
-  pricedCatalogBuiltAt = Date.now();
+  pricedCatalogCache =
+    products;
 
-  savePriceCacheToDisk(products);
+  pricedCatalogBuiltAt =
+    Date.now();
+
+  savePriceCacheToDisk(
+    products
+  );
 
   return products;
 }
@@ -1201,7 +1324,8 @@ async function getPricedCatalog() {
         throw error;
       })
       .finally(() => {
-        priceRefreshPromise = null;
+        priceRefreshPromise =
+          null;
       });
 
   return priceRefreshPromise;
@@ -1218,12 +1342,16 @@ app.get("/health", (req, res) => {
     ok: true,
     service: "ABESHA STORE",
     status: "running",
-
     pricing: {
-      usdToSdg: USD_TO_SDG,
-      cacheFresh: cacheIsFresh(),
+      usdToSdg:
+        USD_TO_SDG,
+
+      cacheFresh:
+        cacheIsFresh(),
+
       cachedProducts:
-        pricedCatalogCache?.length || 0
+        pricedCatalogCache?.length ||
+        0
     }
   });
 });
@@ -1241,14 +1369,15 @@ app.get(
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1263,23 +1392,32 @@ app.get(
     try {
       const results =
         await Promise.allSettled([
-          getAllCategories("topups"),
-          getAllCategories("giftcards"),
-          getAllCategories("gamekeys")
+          getAllCategories(
+            "topups"
+          ),
+          getAllCategories(
+            "giftcards"
+          ),
+          getAllCategories(
+            "gamekeys"
+          )
         ]);
 
       const topups =
-        results[0].status === "fulfilled"
+        results[0].status ===
+        "fulfilled"
           ? results[0].value
           : [];
 
       const giftcards =
-        results[1].status === "fulfilled"
+        results[1].status ===
+        "fulfilled"
           ? results[1].value
           : [];
 
       const gamekeys =
-        results[2].status === "fulfilled"
+        results[2].status ===
+        "fulfilled"
           ? results[2].value
           : [];
 
@@ -1315,14 +1453,15 @@ app.get(
           gamekeys.length
       });
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1346,21 +1485,29 @@ app.get(
         items,
 
         meta: {
-          total: items.length,
-          limit: items.length,
-          next_cursor: null,
-          has_more: false
+          total:
+            items.length,
+
+          limit:
+            items.length,
+
+          next_cursor:
+            null,
+
+          has_more:
+            false
         }
       });
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1373,13 +1520,11 @@ app.get(
         req.query.category_id;
 
       if (!categoryId) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "category_id is required"
-          });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "category_id is required"
+        });
       }
 
       const data =
@@ -1389,14 +1534,15 @@ app.get(
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1420,21 +1566,29 @@ app.get(
         items,
 
         meta: {
-          total: items.length,
-          limit: items.length,
-          next_cursor: null,
-          has_more: false
+          total:
+            items.length,
+
+          limit:
+            items.length,
+
+          next_cursor:
+            null,
+
+          has_more:
+            false
         }
       });
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1447,13 +1601,11 @@ app.get(
         req.query.category_id;
 
       if (!categoryId) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "category_id is required"
-          });
+        return res.status(400).json({
+          ok: false,
+          error:
+            "category_id is required"
+        });
       }
 
       const data =
@@ -1463,14 +1615,15 @@ app.get(
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1487,10 +1640,13 @@ app.get(
         await getPricedCatalog();
 
       const visibleProducts =
-        getPublicProducts(products);
+        getPublicProducts(
+          products
+        );
 
       res.json({
         ok: true,
+
         total:
           visibleProducts.length,
 
@@ -1498,8 +1654,11 @@ app.get(
           visibleProducts,
 
         pricing: {
-          currency: "SDG",
-          usdToSdg: USD_TO_SDG,
+          currency:
+            "SDG",
+
+          usdToSdg:
+            USD_TO_SDG,
 
           catalogMode:
             storeSettings.catalogMode,
@@ -1520,26 +1679,32 @@ app.get(
             ),
 
           roundRules: {
-            under10000: 100,
-            from10000To100000: 500,
-            from100000To500000: 1000,
-            from500000: 5000
+            under10000:
+              100,
+
+            from10000To100000:
+              500,
+
+            from100000To500000:
+              1000,
+
+            from500000:
+              5000
           }
         }
       });
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          ok: false,
-          error: error.message
-        });
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
     }
   }
 );
 
 // ======================================================
-// تحديث الأسعار يدويًا
+// تحديث الأسعار يدويًا عند الحاجة
 // ======================================================
 
 app.post(
@@ -1547,40 +1712,45 @@ app.post(
   async (req, res) => {
     try {
       const adminKey =
-        req.headers["x-admin-key"];
+        req.headers[
+          "x-admin-key"
+        ];
 
       if (
         !process.env.ADMIN_KEY ||
         adminKey !==
           process.env.ADMIN_KEY
       ) {
-        return res
-          .status(401)
-          .json({
-            ok: false,
-            error: "Unauthorized"
-          });
+        return res.status(401).json({
+          ok: false,
+          error:
+            "Unauthorized"
+        });
       }
 
-      pricedCatalogCache = null;
-      pricedCatalogBuiltAt = 0;
+      pricedCatalogCache =
+        null;
+
+      pricedCatalogBuiltAt =
+        0;
 
       const products =
         await getPricedCatalog();
 
       res.json({
         ok: true,
-        total: products.length,
+        total:
+          products.length,
+
         refreshedAt:
           new Date().toISOString()
       });
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          ok: false,
-          error: error.message
-        });
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
     }
   }
 );
@@ -1609,23 +1779,25 @@ app.post(
                 "application/json"
             },
 
-            body: JSON.stringify({
-              category_id,
-              fields
-            })
+            body:
+              JSON.stringify({
+                category_id,
+                fields
+              })
           }
         );
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1649,21 +1821,29 @@ app.get(
         items,
 
         meta: {
-          total: items.length,
-          limit: items.length,
-          next_cursor: null,
-          has_more: false
+          total:
+            items.length,
+
+          limit:
+            items.length,
+
+          next_cursor:
+            null,
+
+          has_more:
+            false
         }
       });
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1683,14 +1863,15 @@ app.get(
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
@@ -1700,7 +1881,8 @@ app.get(
   async (req, res) => {
     try {
       const limit =
-        req.query.limit || "100";
+        req.query.limit ||
+        "100";
 
       const data =
         await fazerGet(
@@ -1709,20 +1891,21 @@ app.get(
 
       res.json(data);
     } catch (error) {
-      res
-        .status(error.status || 500)
-        .json({
-          ok: false,
-          error: error.message,
-          details:
-            error.data || null
-        });
+      res.status(
+        error.status || 500
+      ).json({
+        ok: false,
+        error:
+          error.message,
+        details:
+          error.data || null
+      });
     }
   }
 );
 
 // ======================================================
-// الكتالوج الموحد القديم
+// الكتالوج الموحد القديم — محفوظ للتوافق
 // ======================================================
 
 app.get(
@@ -1731,9 +1914,15 @@ app.get(
     try {
       const familyResults =
         await Promise.allSettled([
-          getAllCategories("topups"),
-          getAllCategories("giftcards"),
-          getAllCategories("gamekeys")
+          getAllCategories(
+            "topups"
+          ),
+          getAllCategories(
+            "giftcards"
+          ),
+          getAllCategories(
+            "gamekeys"
+          )
         ]);
 
       const topups =
@@ -1755,57 +1944,83 @@ app.get(
           : [];
 
       const products = [
-        ...topups.map(item => ({
-          id: item.category_id,
-          name: item.name,
-          type: "topup",
-          note: item.note || "",
-          fields:
-            item.fields || []
-        })),
+        ...topups.map(
+          item => ({
+            id:
+              item.category_id,
 
-        ...giftcards.map(item => ({
-          id: item.category_id,
-          name: item.name,
-          type: "gift_card",
-          note: item.note || "",
-          fields:
-            item.fields || []
-        })),
+            name:
+              item.name,
 
-        ...gamekeys.map(item => ({
-          id:
-            item.game_id ||
-            item.category_id,
+            type:
+              "topup",
 
-          name: item.name,
+            note:
+              item.note || "",
 
-          type: "game_key",
+            fields:
+              item.fields || []
+          })
+        ),
 
-          platform:
-            item.platform || "",
+        ...giftcards.map(
+          item => ({
+            id:
+              item.category_id,
 
-          region:
-            item.region || "",
+            name:
+              item.name,
 
-          region_restriction:
-            item.region_restriction ||
-            false
-        }))
+            type:
+              "gift_card",
+
+            note:
+              item.note || "",
+
+            fields:
+              item.fields || []
+          })
+        ),
+
+        ...gamekeys.map(
+          item => ({
+            id:
+              item.game_id ||
+              item.category_id,
+
+            name:
+              item.name,
+
+            type:
+              "game_key",
+
+            platform:
+              item.platform || "",
+
+            region:
+              item.region || "",
+
+            region_restriction:
+              item.region_restriction ||
+              false
+          })
+        )
       ];
 
       res.json({
         ok: true,
-        total: products.length,
+
+        total:
+          products.length,
+
         products
       });
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          ok: false,
-          error: error.message
-        });
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
     }
   }
 );
@@ -1853,12 +2068,11 @@ app.get(
           config.pricing || {}
       });
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          ok: false,
-          error: error.message
-        });
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
     }
   }
 );
@@ -1872,6 +2086,7 @@ app.get(
   (req, res) => {
     res.json({
       ok: true,
+
       adminKeyConfigured:
         Boolean(
           process.env.ADMIN_KEY
@@ -1886,16 +2101,16 @@ function requireAdmin(
   next
 ) {
   const adminKey =
-    req.headers["x-admin-key"];
+    req.headers[
+      "x-admin-key"
+    ];
 
   if (!process.env.ADMIN_KEY) {
-    return res
-      .status(500)
-      .json({
-        ok: false,
-        error:
-          "ADMIN_KEY is not configured"
-      });
+    return res.status(500).json({
+      ok: false,
+      error:
+        "ADMIN_KEY is not configured"
+    });
   }
 
   if (
@@ -1903,12 +2118,11 @@ function requireAdmin(
     adminKey !==
       process.env.ADMIN_KEY
   ) {
-    return res
-      .status(401)
-      .json({
-        ok: false,
-        error: "Unauthorized"
-      });
+    return res.status(401).json({
+      ok: false,
+      error:
+        "Unauthorized"
+    });
   }
 
   next();
@@ -1924,7 +2138,9 @@ app.get(
 
       res.json({
         ok: true,
-        total: data.length,
+
+        total:
+          data.length,
 
         products:
           data.map(
@@ -1943,12 +2159,11 @@ app.get(
         }
       });
     } catch (error) {
-      res
-        .status(500)
-        .json({
-          ok: false,
-          error: error.message
-        });
+      res.status(500).json({
+        ok: false,
+        error:
+          error.message
+      });
     }
   }
 );
@@ -1984,16 +2199,16 @@ app.post(
       ).trim();
 
     if (
-      !["all", "curated"]
-        .includes(mode)
+      ![
+        "all",
+        "curated"
+      ].includes(mode)
     ) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "mode must be all or curated"
-        });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "mode must be all or curated"
+      });
     }
 
     storeSettings.catalogMode =
@@ -2003,6 +2218,7 @@ app.post(
 
     res.json({
       ok: true,
+
       catalogMode:
         storeSettings.catalogMode
     });
@@ -2015,27 +2231,28 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId || ""
+        req.body?.productId ||
+        ""
       ).trim();
 
     if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "productId is required"
+      });
     }
 
     storeSettings.hiddenIds =
       storeSettings.hiddenIds.filter(
-        id => id !== productId
+        id =>
+          id !== productId
       );
 
     if (
-      !storeSettings.publishedIds
-        .includes(productId)
+      !storeSettings.publishedIds.includes(
+        productId
+      )
     ) {
       storeSettings.publishedIds.push(
         productId
@@ -2058,22 +2275,22 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId || ""
+        req.body?.productId ||
+        ""
       ).trim();
 
     if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "productId is required"
+      });
     }
 
     storeSettings.publishedIds =
       storeSettings.publishedIds.filter(
-        id => id !== productId
+        id =>
+          id !== productId
       );
 
     storeSettings.hiddenIds =
@@ -2100,7 +2317,8 @@ app.post(
   (req, res) => {
     const productId =
       String(
-        req.body?.productId || ""
+        req.body?.productId ||
+        ""
       ).trim();
 
     const discount =
@@ -2109,23 +2327,19 @@ app.post(
       );
 
     if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "productId is required"
+      });
     }
 
     if (!discount) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "Invalid discount"
-        });
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Invalid discount"
+      });
     }
 
     storeSettings.discounts[
@@ -2148,7 +2362,8 @@ app.delete(
   (req, res) => {
     const productId =
       String(
-        req.params.productId || ""
+        req.params.productId ||
+        ""
       ).trim();
 
     delete storeSettings.discounts[
@@ -2166,7 +2381,7 @@ app.delete(
 );
 
 // ======================================================
-// لوحة الإدارة
+// لوحة الإدارة — لا تحتاج ملف HTML منفصل
 // ======================================================
 
 app.get(
@@ -2178,1462 +2393,1513 @@ app.get(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ABESHA STORE — الإدارة</title>
-
 <style>
 *{box-sizing:border-box}
-
 body{
-margin:0;
-font-family:Arial,sans-serif;
-background:#071426;
-color:#eef5ff
+  margin:0;
+  font-family:Arial,sans-serif;
+  background:#071426;
+  color:#eef5ff
 }
-
 header{
-padding:18px 16px;
-background:#0b1f3a;
-border-bottom:1px solid #1d416e;
-position:sticky;
-top:0;
-z-index:5
+  padding:18px 16px;
+  background:#0b1f3a;
+  border-bottom:1px solid #1d416e;
+  position:sticky;
+  top:0;
+  z-index:5
 }
-
 h1{
-margin:0 0 6px;
-font-size:22px
+  margin:0 0 6px;
+  font-size:22px
 }
-
 .muted{
-color:#9fb3cc;
-font-size:13px
+  color:#9fb3cc;
+  font-size:13px
 }
-
 .wrap{
-max-width:1200px;
-margin:auto;
-padding:16px
+  max-width:1200px;
+  margin:auto;
+  padding:16px
 }
-
 .panel{
-background:#0b1f3a;
-border:1px solid #1d416e;
-border-radius:14px;
-padding:14px;
-margin-bottom:14px
+  background:#0b1f3a;
+  border:1px solid #1d416e;
+  border-radius:14px;
+  padding:14px;
+  margin-bottom:14px
 }
-
 .row{
-display:flex;
-gap:10px;
-flex-wrap:wrap;
-align-items:center
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  align-items:center
 }
-
 input,select,button{
-font:inherit;
-border-radius:9px;
-border:1px solid #31577f;
-padding:10px
+  font:inherit;
+  border-radius:9px;
+  border:1px solid #31577f;
+  padding:10px
 }
-
 input,select{
-background:#071426;
-color:#fff;
-min-width:180px
+  background:#071426;
+  color:#fff;
+  min-width:180px
 }
-
 button{
-background:#123866;
-color:#fff;
-cursor:pointer
+  background:#123866;
+  color:#fff;
+  cursor:pointer
 }
-
 button.primary{
-background:#1769aa
+  background:#1769aa
 }
-
 button.danger{
-background:#7d2633
+  background:#7d2633
 }
-
 .stats{
-display:grid;
-grid-template-columns:
-repeat(auto-fit,minmax(150px,1fr));
-gap:10px
+  display:grid;
+  grid-template-columns:
+    repeat(auto-fit,minmax(150px,1fr));
+  gap:10px
 }
-
 .stat{
-background:#071426;
-border-radius:10px;
-padding:12px
+  background:#071426;
+  border-radius:10px;
+  padding:12px
 }
-
 .num{
-font-size:22px;
-font-weight:bold;
-margin-top:5px
+  font-size:22px;
+  font-weight:bold;
+  margin-top:5px
 }
-
 #products{
-display:grid;
-grid-template-columns:
-repeat(auto-fill,minmax(280px,1fr));
-gap:12px
+  display:grid;
+  grid-template-columns:
+    repeat(auto-fill,minmax(280px,1fr));
+  gap:12px
 }
-
 .card{
-background:#0b1f3a;
-border:1px solid #1d416e;
-border-radius:12px;
-padding:13px
+  background:#0b1f3a;
+  border:1px solid #1d416e;
+  border-radius:12px;
+  padding:13px
 }
-
 .card h3{
-font-size:15px;
-margin:0 0 8px;
-line-height:1.4
+  font-size:15px;
+  margin:0 0 8px;
+  line-height:1.4
 }
-
 .price{
-font-size:19px;
-font-weight:bold
+  font-size:19px;
+  font-weight:bold
 }
-
 .badge{
-display:inline-block;
-padding:4px 7px;
-border-radius:7px;
-background:#123866;
-color:#cfe6ff;
-font-size:11px;
-margin:2px
+  display:inline-block;
+  padding:4px 7px;
+  border-radius:7px;
+  background:#123866;
+  color:#cfe6ff;
+  font-size:11px;
+  margin:2px
 }
-
 .actions{
-display:flex;
-gap:7px;
-flex-wrap:wrap;
-margin-top:10px
+  display:flex;
+  gap:7px;
+  flex-wrap:wrap;
+  margin-top:10px
 }
-
 .small{
-font-size:12px;
-color:#a9bdd3
+  font-size:12px;
+  color:#a9bdd3
 }
-
 .discount{
-color:#ffd36b
+  color:#ffd36b
 }
-
 .hidden{
-display:none
+  display:none
 }
 </style>
 </head>
-
 <body>
 
 <header>
-<div class="wrap" style="padding:0">
-
-<h1>
-ABESHA STORE — لوحة الإدارة
-</h1>
-
-<div class="muted">
-إدارة المنتجات، النشر، الأسعار والعروض
-</div>
-
-</div>
+  <div class="wrap" style="padding:0">
+    <h1>ABESHA STORE — لوحة الإدارة</h1>
+    <div class="muted">
+      إدارة المنتجات، النشر، الأسعار والعروض
+    </div>
+  </div>
 </header>
 
 <main class="wrap">
 
-<section class="panel">
+  <section class="panel">
+    <div class="row">
 
-<div class="row">
+      <input
+        id="key"
+        type="password"
+        placeholder="ADMIN_KEY"
+      >
 
-<input
-id="key"
-type="password"
-placeholder="ADMIN_KEY">
+      <button
+        class="primary"
+        onclick="loadAll()"
+      >
+        دخول وتحميل الكتالوج
+      </button>
 
-<button
-class="primary"
-onclick="loadAll()">
-دخول وتحميل الكتالوج
-</button>
+      <select
+        id="mode"
+        onchange="changeMode()"
+      >
+        <option value="all">
+          عرض كل المنتجات الحالية
+        </option>
 
-<select
-id="mode"
-onchange="changeMode()">
+        <option value="curated">
+          عرض المنتجات التي أختارها فقط
+        </option>
+      </select>
 
-<option value="all">
-عرض كل المنتجات الحالية
-</option>
+    </div>
 
-<option value="curated">
-عرض المنتجات التي أختارها فقط
-</option>
+    <div
+      id="msg"
+      class="muted"
+      style="margin-top:9px"
+    ></div>
+  </section>
 
-</select>
+  <section class="panel">
 
-</div>
+    <div class="stats">
 
-<div
-id="msg"
-class="muted"
-style="margin-top:9px">
-</div>
+      <div class="stat">
+        إجمالي الكتالوج
+        <div
+          class="num"
+          id="total"
+        >—</div>
+      </div>
 
-</section>
+      <div class="stat">
+        المنشور
+        <div
+          class="num"
+          id="published"
+        >—</div>
+      </div>
 
-<section class="panel">
+      <div class="stat">
+        المخفي
+        <div
+          class="num"
+          id="hidden"
+        >—</div>
+      </div>
 
-<div class="stats">
+      <div class="stat">
+        عروض نشطة
+        <div
+          class="num"
+          id="discounts"
+        >—</div>
+      </div>
 
-<div class="stat">
-إجمالي الكتالوج
-<div class="num" id="total">—</div>
-</div>
+    </div>
 
-<div class="stat">
-المنشور
-<div class="num" id="published">—</div>
-</div>
+  </section>
 
-<div class="stat">
-المخفي
-<div class="num" id="hidden">—</div>
-</div>
+  <section class="panel">
 
-<div class="stat">
-عروض نشطة
-<div class="num" id="discounts">—</div>
-</div>
+    <div class="row">
 
-</div>
+      <input
+        id="search"
+        placeholder="ابحث باسم المنتج..."
+        oninput="render()"
+      >
 
-</section>
+      <select
+        id="type"
+        onchange="render()"
+      >
+        <option value="">
+          كل الأقسام
+        </option>
 
-<section class="panel">
+        <option value="topup">
+          Topups
+        </option>
 
-<div class="row">
+        <option value="gift_card">
+          Gift Cards
+        </option>
 
-<input
-id="search"
-placeholder="ابحث باسم المنتج..."
-oninput="render()">
+        <option value="game_key">
+          Game Keys
+        </option>
+      </select>
 
-<select
-id="type"
-onchange="render()">
+    </div>
 
-<option value="">
-كل الأقسام
-</option>
+  </section>
 
-<option value="topup">
-Topups
-</option>
-
-<option value="gift_card">
-Gift Cards
-</option>
-
-<option value="game_key">
-Game Keys
-</option>
-
-</select>
-
-</div>
-
-</section>
-
-<section id="products"></section>
+  <section id="products"></section>
 
 </main>
 
 <script>
-
 let key="";
 let data=[];
 let settings={};
 
 function esc(s){
-return String(s??"").replace(
-/[&<>"']/g,
-m=>({
-"&":"&amp;",
-"<":"&lt;",
-">":"&gt;",
-"\\":"&quot;",
-"'":"&#039;"
-}[m])
-);
+  return String(s??"").replace(
+    /[&<>"']/g,
+    m => ({
+      "&":"&amp;",
+      "<":"&lt;",
+      ">":"&gt;",
+      "\"":"&quot;",
+      "'":"&#039;"
+    }[m])
+  );
 }
 
 function headers(){
-return {
-"Content-Type":"application/json",
-"x-admin-key":key
-}
+  return {
+    "Content-Type":
+      "application/json",
+
+    "x-admin-key":
+      key
+  };
 }
 
 function msg(t){
-document.getElementById(
-"msg"
-).textContent=t||"";
+  document.getElementById(
+    "msg"
+  ).textContent =
+    t || "";
 }
 
-async function api(url,opts={}){
-const r=await fetch(
-url,
-{
-...opts,
-headers:{
-...headers(),
-...(opts.headers||{})
-}
-}
-);
+async function api(
+  url,
+  opts={}
+){
+  const r =
+    await fetch(
+      url,
+      {
+        ...opts,
 
-const j=await r.json()
-.catch(()=>({}));
+        headers:{
+          ...headers(),
+          ...(opts.headers||{})
+        }
+      }
+    );
 
-if(!r.ok)
-throw new Error(
-j.error||"حدث خطأ"
-);
+  const j =
+    await r.json()
+      .catch(
+        () => ({})
+      );
 
-return j;
+  if(!r.ok){
+    throw new Error(
+      j.error ||
+      "حدث خطأ"
+    );
+  }
+
+  return j;
 }
 
 async function loadAll(){
 
-key=document
-.getElementById("key")
-.value
-.trim();
+  key =
+    document
+      .getElementById("key")
+      .value
+      .trim();
 
-if(!key){
-msg("أدخل مفتاح الإدارة.");
-return;
-}
+  if(!key){
+    msg(
+      "أدخل مفتاح الإدارة."
+    );
+    return;
+  }
 
-try{
+  try{
 
-const j=
-await api(
-"/api/admin/catalog"
-);
+    const j =
+      await api(
+        "/api/admin/catalog"
+      );
 
-data=j.products||[];
-settings=j.settings||{};
+    data =
+      j.products ||
+      [];
 
-document.getElementById(
-"mode"
-).value=
-settings.catalogMode||"all";
+    settings =
+      j.settings ||
+      {};
 
-updateStats();
-render();
+    document
+      .getElementById("mode")
+      .value =
+        settings.catalogMode ||
+        "all";
 
-msg(
-"تم تحميل الكتالوج."
-);
+    updateStats();
+    render();
 
-}catch(e){
+    msg(
+      "تم تحميل الكتالوج."
+    );
 
-msg(e.message);
+  }catch(e){
 
-}
+    msg(
+      e.message
+    );
+
+  }
 }
 
 function updateStats(){
 
-document.getElementById(
-"total"
-).textContent=
-data.length;
+  document
+    .getElementById(
+      "total"
+    )
+    .textContent =
+      data.length;
 
-document.getElementById(
-"published"
-).textContent=
-data.filter(
-p=>p.published
-).length;
+  document
+    .getElementById(
+      "published"
+    )
+    .textContent =
+      data.filter(
+        p => p.published
+      ).length;
 
-document.getElementById(
-"hidden"
-).textContent=
-data.filter(
-p=>!p.published
-).length;
+  document
+    .getElementById(
+      "hidden"
+    )
+    .textContent =
+      data.filter(
+        p => !p.published
+      ).length;
 
-document.getElementById(
-"discounts"
-).textContent=
-data.filter(
-p=>
-p.discount &&
-p.discount.active!==false
-).length;
-
+  document
+    .getElementById(
+      "discounts"
+    )
+    .textContent =
+      data.filter(
+        p =>
+          p.discount &&
+          p.discount.active !== false
+      ).length;
 }
 
 function render(){
 
-const q=
-document
-.getElementById("search")
-.value
-.trim()
-.toLowerCase();
+  const q =
+    document
+      .getElementById(
+        "search"
+      )
+      .value
+      .trim()
+      .toLowerCase();
 
-const type=
-document
-.getElementById("type")
-.value;
+  const type =
+    document
+      .getElementById(
+        "type"
+      )
+      .value;
 
-const list=
-data.filter(
-p=>
-(!q||
-String(
-p.name||""
-)
-.toLowerCase()
-.includes(q))
-&&
-(!type||
-p.type===type)
-);
+  const list =
+    data.filter(
+      p =>
+        (
+          !q ||
+          String(
+            p.name || ""
+          )
+          .toLowerCase()
+          .includes(q)
+        ) &&
+        (
+          !type ||
+          p.type === type
+        )
+    );
 
-const box=
-document.getElementById(
-"products"
-);
+  const box =
+    document.getElementById(
+      "products"
+    );
 
-box.innerHTML=
-list
-.slice(0,500)
-.map(
-p=>{
+  box.innerHTML =
+    list
+      .slice(0,500)
+      .map(p => {
 
-const d=p.discount;
+        const d =
+          p.discount;
 
-const price=
-Number(
-p.price_sdg||0
-);
+        const price =
+          Number(
+            p.price_sdg || 0
+          );
 
-const state=
-p.published
-?"منشور"
-:"مخفي";
+        const state =
+          p.published
+            ? "منشور"
+            : "مخفي";
 
-return '<article class="card">'+
-'<h3>'+
-esc(p.name)+
-'</h3>'+
-'<div class="small">'+
-esc(p.type)+
-' · '+
-esc(p.id)+
-'</div>'+
-'<div class="price">'+
-price.toLocaleString("en-US")+
-' SDG</div>'+
-(
-d
-?
-'<div class="discount">'+
-'عرض: '+
-esc(d.label)+
-' — '+
-(
-d.type==="percent"
-?
-d.value+"%"
-:
-d.value.toLocaleString(
-"en-US"
-)+" SDG"
-)+
-'</div>'
-:
-''
-)+
-'<div>'+
-'<span class="badge">'+
-state+
-'</span>'+
-(
-p.stock!==undefined&&
-p.stock!==null
-?
-'<span class="badge">Stock: '+
-esc(p.stock)+
-'</span>'
-:
-''
-)+
-'</div>'+
-'<div class="actions">'+
-'<button class="primary" onclick="togglePublish('+
-JSON.stringify(p.id)+
-','+
-(!p.published)+
-')">'+
-(
-p.published
-?"إخفاء"
-:"نشر"
-)+
-'</button>'+
-'<button onclick="setDiscount('+
-JSON.stringify(p.id)+
-')">'+
-'عرض/خصم'+
-'</button>'+
-(
-d
-?
-'<button class="danger" onclick="removeDiscount('+
-JSON.stringify(p.id)+
-')">'+
-'إزالة العرض'+
-'</button>'
-:
-''
-)+
-'</div></article>';
+        return '<article class="card">'+
 
-}
-)
-.join("");
+          '<h3>'+
+            esc(p.name)+
+          '</h3>'+
 
+          '<div class="small">'+
+            esc(p.type)+
+            ' · '+
+            esc(p.id)+
+          '</div>'+
+
+          '<div class="price">'+
+            price.toLocaleString(
+              "en-US"
+            )+
+            ' SDG'+
+          '</div>'+
+
+          (
+            d
+              ? '<div class="discount">'+
+                'عرض: '+
+                esc(d.label)+
+                ' — '+
+                (
+                  d.type === "percent"
+                    ? d.value+"%"
+                    : d.value.toLocaleString(
+                        "en-US"
+                      )+
+                      " SDG"
+                )+
+                '</div>'
+              : ''
+          )+
+
+          '<div>'+
+            '<span class="badge">'+
+              state+
+            '</span>'+
+
+            (
+              p.stock !== undefined &&
+              p.stock !== null
+                ? '<span class="badge">'+
+                  'Stock: '+
+                  esc(p.stock)+
+                  '</span>'
+                : ''
+            )+
+
+          '</div>'+
+
+          '<div class="actions">'+
+
+            '<button class="primary" '+
+              'onclick="togglePublish('+
+                JSON.stringify(p.id)+
+                ','+
+                (!p.published)+
+              ')">'+
+              (
+                p.published
+                  ? "إخفاء"
+                  : "نشر"
+              )+
+            '</button>'+
+
+            '<button '+
+              'onclick="setDiscount('+
+                JSON.stringify(p.id)+
+              ')">'+
+              'عرض/خصم'+
+            '</button>'+
+
+            (
+              d
+                ? '<button class="danger" '+
+                  'onclick="removeDiscount('+
+                    JSON.stringify(p.id)+
+                  ')">'+
+                  'إزالة العرض'+
+                  '</button>'
+                : ''
+            )+
+
+          '</div>'+
+
+        '</article>';
+
+      })
+      .join("");
 }
 
 async function togglePublish(
-id,
-publish
+  id,
+  publish
 ){
 
-try{
+  try{
 
-await api(
-publish
-?"/api/admin/catalog/publish"
-:"/api/admin/catalog/unpublish",
-{
-method:"POST",
-body:JSON.stringify({
-productId:id
-})
-}
-);
+    await api(
+      publish
+        ? "/api/admin/catalog/publish"
+        : "/api/admin/catalog/unpublish",
 
-const p=
-data.find(
-x=>x.id===id
-);
+      {
+        method:"POST",
 
-if(p)
-p.published=
-publish;
+        body:
+          JSON.stringify({
+            productId:id
+          })
+      }
+    );
 
-updateStats();
-render();
+    const p =
+      data.find(
+        x => x.id === id
+      );
 
-msg(
-publish
-?"تم نشر المنتج."
-:"تم إخفاء المنتج."
-);
+    if(p){
+      p.published =
+        publish;
+    }
 
-}catch(e){
+    updateStats();
+    render();
 
-msg(e.message);
+    msg(
+      publish
+        ? "تم نشر المنتج."
+        : "تم إخفاء المنتج."
+    );
 
-}
+  }catch(e){
 
+    msg(
+      e.message
+    );
+
+  }
 }
 
 async function setDiscount(id){
 
-const type=
-prompt(
-"نوع الخصم: percent للنسبة أو fixed لمبلغ SDG",
-"percent"
-);
+  const type =
+    prompt(
+      "نوع الخصم: percent للنسبة أو fixed لمبلغ SDG",
+      "percent"
+    );
 
-if(type===null)
-return;
+  if(type===null){
+    return;
+  }
 
-if(
-!["percent","fixed"]
-.includes(type.trim())
-){
+  if(
+    ![
+      "percent",
+      "fixed"
+    ].includes(
+      type.trim()
+    )
+  ){
+    msg(
+      "نوع الخصم غير صحيح."
+    );
+    return;
+  }
 
-msg(
-"نوع الخصم غير صحيح."
-);
+  const value =
+    prompt(
+      type==="percent"
+        ? "نسبة الخصم"
+        : "قيمة الخصم بالجنيه السوداني",
+      "10"
+    );
 
-return;
-}
+  if(value===null){
+    return;
+  }
 
-const value=
-prompt(
-type==="percent"
-?"نسبة الخصم"
-:"قيمة الخصم بالجنيه السوداني",
-"10"
-);
+  const n =
+    Number(value);
 
-if(value===null)
-return;
+  if(
+    !Number.isFinite(n) ||
+    n<=0
+  ){
+    msg(
+      "قيمة الخصم غير صحيحة."
+    );
+    return;
+  }
 
-const n=Number(value);
+  const label =
+    prompt(
+      "اسم العرض",
+      "عرض خاص"
+    );
 
-if(
-!Number.isFinite(n)||
-n<=0
-){
+  if(label===null){
+    return;
+  }
 
-msg(
-"قيمة الخصم غير صحيحة."
-);
+  try{
 
-return;
-}
+    const j =
+      await api(
+        "/api/admin/catalog/discount",
+        {
+          method:"POST",
 
-const label=
-prompt(
-"اسم العرض",
-"عرض خاص"
-);
+          body:
+            JSON.stringify({
+              productId:id,
 
-if(label===null)
-return;
+              discount:{
+                type,
+                value:n,
+                label,
+                active:true
+              }
+            })
+        }
+      );
 
-try{
+    const p =
+      data.find(
+        x => x.id === id
+      );
 
-const j=
-await api(
-"/api/admin/catalog/discount",
-{
-method:"POST",
-body:JSON.stringify({
-productId:id,
+    if(p){
+      p.discount =
+        j.discount;
+    }
 
-discount:{
-type,
-value:n,
-label,
-active:true
-}
+    updateStats();
+    render();
 
-})
-}
-);
+    msg(
+      "تم حفظ العرض."
+    );
 
-const p=
-data.find(
-x=>x.id===id
-);
+  }catch(e){
 
-if(p)
-p.discount=
-j.discount;
+    msg(
+      e.message
+    );
 
-updateStats();
-render();
-
-msg(
-"تم حفظ العرض."
-);
-
-}catch(e){
-
-msg(e.message);
-
-}
-
+  }
 }
 
 async function removeDiscount(id){
 
-try{
+  try{
 
-await api(
-"/api/admin/catalog/discount/"+
-encodeURIComponent(id),
-{
-method:"DELETE"
-}
-);
+    await api(
+      "/api/admin/catalog/discount/"+
+      encodeURIComponent(id),
 
-const p=
-data.find(
-x=>x.id===id
-);
+      {
+        method:"DELETE"
+      }
+    );
 
-if(p)
-p.discount=null;
+    const p =
+      data.find(
+        x => x.id === id
+      );
 
-updateStats();
-render();
+    if(p){
+      p.discount =
+        null;
+    }
 
-msg(
-"تمت إزالة العرض."
-);
+    updateStats();
+    render();
 
-}catch(e){
+    msg(
+      "تمت إزالة العرض."
+    );
 
-msg(e.message);
+  }catch(e){
 
-}
+    msg(
+      e.message
+    );
 
+  }
 }
 
 async function changeMode(){
 
-if(!key){
+  if(!key){
+    msg(
+      "أدخل ADMIN_KEY أولاً."
+    );
+    return;
+  }
 
-msg(
-"أدخل ADMIN_KEY أولاً."
-);
+  try{
 
-return;
+    const mode =
+      document
+        .getElementById(
+          "mode"
+        )
+        .value;
+
+    await api(
+      "/api/admin/catalog/mode",
+      {
+        method:"POST",
+
+        body:
+          JSON.stringify({
+            mode
+          })
+      }
+    );
+
+    settings.catalogMode =
+      mode;
+
+    msg(
+      "تم تغيير طريقة عرض الكتالوج."
+    );
+
+  }catch(e){
+
+    msg(
+      e.message
+    );
+
+  }
 }
-
-try{
-
-const mode=
-document
-.getElementById("mode")
-.value;
-
-await api(
-"/api/admin/catalog/mode",
-{
-method:"POST",
-body:JSON.stringify({
-mode
-})
-}
-);
-
-settings.catalogMode=
-mode;
-
-msg(
-"تم تغيير طريقة عرض الكتالوج."
-);
-
-}catch(e){
-
-msg(e.message);
-
-}
-
-}
-
 </script>
 
 </body>
 </html>`);
-});
+  }
+);
 
 // ======================================================
 // الطلبات
 // ======================================================
 
-const ORDERS = new Map();
 
-function loadOrdersFromDisk() {
+const ORDERS =
+  new Map();
 
-try {
+function loadOrdersFromDisk(){
 
-if(
-!fs.existsSync(
-ORDERS_FILE
-)
-)
-return;
+  try{
 
-const parsed=
-JSON.parse(
-fs.readFileSync(
-ORDERS_FILE,
-"utf8"
-)
-);
+    if(
+      !fs.existsSync(
+        ORDERS_FILE
+      )
+    ){
+      return;
+    }
 
-if(
-!Array.isArray(parsed)
-)
-return;
+    const parsed =
+      JSON.parse(
+        fs.readFileSync(
+          ORDERS_FILE,
+          "utf8"
+        )
+      );
 
-for(
-const order of parsed
-){
+    if(
+      !Array.isArray(parsed)
+    ){
+      return;
+    }
 
-if(
-order?.orderNumber
-)
-ORDERS.set(
-order.orderNumber,
-order
-);
+    for(
+      const order of parsed
+    ){
 
-}
+      if(
+        order?.orderNumber
+      ){
+        ORDERS.set(
+          order.orderNumber,
+          order
+        );
+      }
+    }
 
-console.log(
-`[ORDERS] Loaded ${ORDERS.size} orders from disk`
-);
+    console.log(
+      `[ORDERS] Loaded ${ORDERS.size} orders from disk`
+    );
 
-}catch(error){
+  }catch(error){
 
-console.warn(
-"[ORDERS] Could not load orders:",
-error.message
-);
+    console.warn(
+      "[ORDERS] Could not load orders:",
+      error.message
+    );
 
-}
-
+  }
 }
 
 function saveOrdersToDisk(){
 
-try{
+  try{
 
-fs.writeFileSync(
-ORDERS_FILE,
-JSON.stringify(
-Array.from(
-ORDERS.values()
-),
-null,
-2
-),
-"utf8"
-);
+    fs.writeFileSync(
+      ORDERS_FILE,
 
-}catch(error){
+      JSON.stringify(
+        Array.from(
+          ORDERS.values()
+        ),
+        null,
+        2
+      ),
 
-console.warn(
-"[ORDERS] Could not save orders:",
-error.message
-);
+      "utf8"
+    );
 
-}
+  }catch(error){
 
+    console.warn(
+      "[ORDERS] Could not save orders:",
+      error.message
+    );
+
+  }
 }
 
 function customerKey(
-customer={}
+  customer={}
 ){
 
-const raw=
-String(
-customer.phone||
-customer.email||
-""
-)
-.trim()
-.toLowerCase();
+  const raw =
+    String(
+      customer.phone ||
+      customer.email ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
 
-if(!raw)
-return null;
+  if(!raw){
+    return null;
+  }
 
-return crypto
-.createHash("sha256")
-.update(raw)
-.digest("hex")
-.slice(0,24);
-
+  return crypto
+    .createHash("sha256")
+    .update(raw)
+    .digest("hex")
+    .slice(0,24);
 }
 
 loadOrdersFromDisk();
 
+
 function generateOrderNumber(){
 
-const part1=
-Math.floor(
-100000+
-Math.random()*
-900000
-);
+  const part1 =
+    Math.floor(
+      100000 +
+      Math.random() *
+      900000
+    );
 
-const part2=
-Math.floor(
-100000+
-Math.random()*
-900000
-);
+  const part2 =
+    Math.floor(
+      100000 +
+      Math.random() *
+      900000
+    );
 
-return `AB-${part1}-${part2}`;
-
+  return `AB-${part1}-${part2}`;
 }
 
 app.post(
-"/api/orders",
-(req,res)=>{
+  "/api/orders",
+  (req, res) => {
 
-try{
+    try{
 
-const {
-customer,
-items,
-paymentMethod,
-total
-}=req.body;
+      const {
+        customer,
+        items,
+        paymentMethod,
+        total
+      } = req.body;
 
-if(
-!customer||
-typeof customer!=="object"
-){
+      if(
+        !customer ||
+        typeof customer !==
+          "object"
+      ){
+        return res.status(400).json({
+          ok:false,
+          error:
+            "customer is required"
+        });
+      }
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"customer is required"
-});
+      if(
+        !Array.isArray(items) ||
+        items.length === 0
+      ){
+        return res.status(400).json({
+          ok:false,
+          error:
+            "items are required"
+        });
+      }
 
-}
+      if(!paymentMethod){
 
-if(
-!Array.isArray(items)||
-items.length===0
-){
+        return res.status(400).json({
+          ok:false,
+          error:
+            "paymentMethod is required"
+        });
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"items are required"
-});
+      }
 
-}
+      const amount =
+        Number(total);
 
-if(!paymentMethod){
+      if(
+        !Number.isFinite(
+          amount
+        ) ||
+        amount <= 0
+      ){
+        return res.status(400).json({
+          ok:false,
+          error:
+            "Invalid total"
+        });
+      }
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"paymentMethod is required"
-});
+      const orderNumber =
+        generateOrderNumber();
 
-}
+      const order = {
 
-const amount=
-Number(total);
+        orderNumber,
 
-if(
-!Number.isFinite(amount)||
-amount<=0
-){
+        customer: {
+          name:
+            String(
+              customer.name ||
+              ""
+            ).trim(),
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"Invalid total"
-});
+          phone:
+            String(
+              customer.phone ||
+              ""
+            ).trim(),
 
-}
+          email:
+            String(
+              customer.email ||
+              ""
+            ).trim()
+        },
 
-const orderNumber=
-generateOrderNumber();
+        items:
+          items.map(
+            item => ({
+              productId:
+                String(
+                  item.productId ||
+                  ""
+                ),
 
-const order={
+              name:
+                String(
+                  item.name ||
+                  ""
+                ),
 
-orderNumber,
+              quantity:
+                item.quantity ||
+                "",
 
-customer:{
-name:
-String(
-customer.name||""
-).trim(),
+              price:
+                Number(
+                  item.price
+                ) || 0,
 
-phone:
-String(
-customer.phone||""
-).trim(),
+              fields:
+                item.fields ||
+                {}
+            })
+          ),
 
-email:
-String(
-customer.email||""
-).trim()
-},
+        payment: {
+          method:
+            String(
+              paymentMethod
+            ),
 
-items:
-items.map(
-item=>({
+          status:
+            "PENDING",
 
-productId:
-String(
-item.productId||""
-),
+          transactionId:
+            null
+        },
 
-name:
-String(
-item.name||""
-),
+        total:
+          amount,
 
-quantity:
-item.quantity||"",
+        status:
+          "PAYMENT_PENDING",
 
-price:
-Number(
-item.price
-)||0,
+        createdAt:
+          new Date()
+            .toISOString(),
 
-fields:
-item.fields||{}
+        updatedAt:
+          new Date()
+            .toISOString()
+      };
 
-})
-),
+      ORDERS.set(
+        orderNumber,
+        order
+      );
 
-payment:{
-method:
-String(
-paymentMethod
-),
+      console.log(
+        `[ORDER CREATED] ${orderNumber} - ${amount} SDG - ${paymentMethod}`
+      );
 
-status:
-"PENDING",
+      res.status(201).json({
+        ok:true,
 
-transactionId:null
-},
+        order:{
+          orderNumber:
+            order.orderNumber,
 
-total:amount,
+          status:
+            order.status,
 
-status:
-"PAYMENT_PENDING",
+          total:
+            order.total,
 
-createdAt:
-new Date().toISOString(),
+          paymentMethod:
+            order.payment.method,
 
-updatedAt:
-new Date().toISOString()
+          createdAt:
+            order.createdAt
+        }
+      });
 
-};
+    }catch(error){
 
-ORDERS.set(
-orderNumber,
-order
-);
+      console.error(
+        "Create order error:",
+        error
+      );
 
-console.log(
-`[ORDER CREATED] ${orderNumber} - ${amount} SDG - ${paymentMethod}`
-);
+      res.status(500).json({
+        ok:false,
+        error:
+          "Failed to create order"
+      });
 
-res
-.status(201)
-.json({
-ok:true,
+    }
 
-order:{
-orderNumber:
-order.orderNumber,
-
-status:
-order.status,
-
-total:
-order.total,
-
-paymentMethod:
-order.payment.method,
-
-createdAt:
-order.createdAt
-}
-
-});
-
-}catch(error){
-
-console.error(
-"Create order error:",
-error
-);
-
-res
-.status(500)
-.json({
-ok:false,
-error:
-"Failed to create order"
-});
-
-}
-
-}
+  }
 );
 
 app.get(
-"/api/orders/:orderNumber",
-(req,res)=>{
+  "/api/orders/:orderNumber",
+  (req, res) => {
 
-const order=
-ORDERS.get(
-req.params.orderNumber
+    const order =
+      ORDERS.get(
+        req.params.orderNumber
+      );
+
+    if(!order){
+
+      return res.status(404).json({
+        ok:false,
+        error:
+          "Order not found"
+      });
+
+    }
+
+    res.json({
+      ok:true,
+      order
+    });
+
+  }
 );
 
-if(!order){
-
-return res
-.status(404)
-.json({
-ok:false,
-error:
-"Order not found"
-});
-
-}
-
-res.json({
-ok:true,
-order
-});
-
-}
-);
 
 app.get(
-"/api/customer/orders",
-(req,res)=>{
+  "/api/customer/orders",
+  (req, res) => {
 
-const phone=
-String(
-req.query.phone||""
-).trim();
+    const phone =
+      String(
+        req.query.phone ||
+        ""
+      ).trim();
 
-const email=
-String(
-req.query.email||""
-).trim();
+    const email =
+      String(
+        req.query.email ||
+        ""
+      ).trim();
 
-const key=
-customerKey({
-phone,
-email
-});
+    const key =
+      customerKey({
+        phone,
+        email
+      });
 
-if(!key){
+    if(!key){
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"phone or email is required"
-});
+      return res.status(400).json({
+        ok:false,
+        error:
+          "phone or email is required"
+      });
 
-}
+    }
 
-const customerOrders=
-Array.from(
-ORDERS.values()
-)
-.filter(
-order =>
-order.customerKey===key
-)
-.sort(
-(a,b)=>
-new Date(b.createdAt)-
-new Date(a.createdAt)
-)
-.map(
-order=>({
+    const customerOrders =
+      Array.from(
+        ORDERS.values()
+      )
+        .filter(
+          order =>
+            order.customerKey ===
+            key
+        )
+        .sort(
+          (a,b) =>
+            new Date(
+              b.createdAt
+            ) -
+            new Date(
+              a.createdAt
+            )
+        )
+        .map(
+          order => ({
+            orderNumber:
+              order.orderNumber,
 
-orderNumber:
-order.orderNumber,
+            total:
+              order.total,
 
-total:
-order.total,
+            status:
+              order.status,
 
-status:
-order.status,
+            paymentMethod:
+              order.payment?.method ||
+              null,
 
-paymentMethod:
-order.payment?.method||
-null,
+            createdAt:
+              order.createdAt,
 
-createdAt:
-order.createdAt,
+            items:
+              order.items
+          })
+        );
 
-items:
-order.items
+    res.json({
+      ok:true,
 
-})
-);
+      total:
+        customerOrders.length,
 
-res.json({
-ok:true,
+      orders:
+        customerOrders
+    });
 
-total:
-customerOrders.length,
-
-orders:
-customerOrders
-});
-
-}
+  }
 );
 
 app.post(
-"/api/customer/reorder",
-async (req,res)=>{
+  "/api/customer/reorder",
+  async (req, res) => {
 
-try{
+    try{
 
-const orderNumber=
-String(
-req.body?.orderNumber||""
-).trim();
+      const orderNumber =
+        String(
+          req.body?.orderNumber ||
+          ""
+        ).trim();
 
-const order=
-ORDERS.get(
-orderNumber
-);
+      const order =
+        ORDERS.get(
+          orderNumber
+        );
 
-if(!order){
+      if(!order){
 
-return res
-.status(404)
-.json({
-ok:false,
-error:
-"Order not found"
-});
+        return res.status(404).json({
+          ok:false,
+          error:
+            "Order not found"
+        });
 
-}
+      }
 
-const catalog=
-await getPricedCatalog();
+      const catalog =
+        await getPricedCatalog();
 
-const byId=
-new Map(
-catalog.map(
-product =>
-[
-String(product.id),
-product
-]
-)
-);
+      const byId =
+        new Map(
+          catalog.map(
+            product =>
+              [
+                String(
+                  product.id
+                ),
+                product
+              ]
+          )
+        );
 
-const items=
-order.items
-.map(
-item =>
-byId.get(
-String(
-item.productId
-)
-)
-)
-.filter(
-product =>
-product&&
-Number(
-product.price_sdg
-)>0
-)
-.map(
-product=>{
+      const items =
+        order.items
+          .map(
+            item =>
+              byId.get(
+                String(
+                  item.productId
+                )
+              )
+          )
+          .filter(
+            product =>
+              product &&
+              Number(
+                product.price_sdg
+              ) > 0
+          )
+          .map(
+            product => {
 
-const publicProduct=
-enrichProductForStore(
-product
-);
+              const publicProduct =
+                enrichProductForStore(
+                  product
+                );
 
-return {
+              return {
+                productId:
+                  publicProduct.id,
 
-productId:
-publicProduct.id,
+                name:
+                  publicProduct.name,
 
-name:
-publicProduct.name,
+                price:
+                  publicProduct.price_sdg,
 
-price:
-publicProduct.price_sdg,
+                quantity:
+                  1,
 
-quantity:1,
+                fields:
+                  publicProduct.fields ||
+                  {}
+              };
 
-fields:
-publicProduct.fields||{}
+            }
+          );
 
-};
+      res.json({
 
-}
-);
+        ok:true,
 
-res.json({
+        sourceOrderNumber:
+          orderNumber,
 
-ok:true,
+        total:
+          items.reduce(
+            (
+              sum,
+              item
+            ) =>
+              sum +
+              Number(
+                item.price ||
+                0
+              ),
+            0
+          ),
 
-sourceOrderNumber:
-orderNumber,
+        items
 
-total:
-items.reduce(
-(sum,item)=>
-sum+
-Number(
-item.price||0
-),
-0
-),
+      });
 
-items
+    }catch(error){
 
-});
+      res.status(500).json({
+        ok:false,
+        error:
+          error.message
+      });
 
-}catch(error){
+    }
 
-res
-.status(500)
-.json({
-ok:false,
-error:
-error.message
-});
-
-}
-
-}
+  }
 );
 
 app.get(
-"/api/admin/orders",
-requireAdmin,
-(req,res)=>{
+  "/api/admin/orders",
+  requireAdmin,
+  (req, res) => {
 
-const list=
-Array.from(
-ORDERS.values()
-)
-.sort(
-(a,b)=>
-new Date(b.createdAt)-
-new Date(a.createdAt)
-);
+    const list =
+      Array.from(
+        ORDERS.values()
+      )
+      .sort(
+        (a,b) => {
+          return (
+            new Date(
+              b.createdAt
+            ) -
+            new Date(
+              a.createdAt
+            )
+          );
+        }
+      );
 
-res.json({
+    res.json({
+      ok:true,
 
-ok:true,
+      total:
+        list.length,
 
-total:
-list.length,
+      orders:
+        list
+    });
 
-orders:
-list
-
-});
-
-}
+  }
 );
 
 app.post(
-"/api/admin/orders/:orderNumber/confirm-payment",
-requireAdmin,
-(req,res)=>{
+  "/api/admin/orders/:orderNumber/confirm-payment",
+  requireAdmin,
+  (req, res) => {
 
-const order=
-ORDERS.get(
-req.params.orderNumber
-);
+    const order =
+      ORDERS.get(
+        req.params.orderNumber
+      );
 
-if(!order){
+    if(!order){
 
-return res
-.status(404)
-.json({
-ok:false,
-error:
-"Order not found"
-});
+      return res.status(404).json({
+        ok:false,
+        error:
+          "Order not found"
+      });
 
-}
+    }
 
-if(
-order.status!==
-"PAYMENT_PENDING"
-){
+    if(
+      order.status !==
+      "PAYMENT_PENDING"
+    ){
 
-return res
-.status(409)
-.json({
-ok:false,
-error:
-`Order cannot be confirmed from status ${order.status}`
-});
+      return res.status(409).json({
+        ok:false,
 
-}
+        error:
+          `Order cannot be confirmed from status ${order.status}`
+      });
 
-const transactionId=
-String(
-req.body?.transactionId||
-""
-).trim();
+    }
 
-if(!transactionId){
+    const transactionId =
+      String(
+        req.body?.transactionId ||
+        ""
+      ).trim();
 
-return res
-.status(400)
-.json({
-ok:false,
-error:
-"transactionId is required"
-});
+    if(!transactionId){
 
-}
+      return res.status(400).json({
+        ok:false,
+        error:
+          "transactionId is required"
+      });
 
-order.payment.transactionId=
-transactionId;
+    }
 
-order.payment.status=
-"CONFIRMED";
+    order.payment.transactionId =
+      transactionId;
 
-order.status=
-"PAYMENT_CONFIRMED";
+    order.payment.status =
+      "CONFIRMED";
 
-order.updatedAt=
-new Date().toISOString();
+    order.status =
+      "PAYMENT_CONFIRMED";
 
-ORDERS.set(
-order.orderNumber,
-order
-);
+    order.updatedAt =
+      new Date()
+        .toISOString();
 
-saveOrdersToDisk();
+    ORDERS.set(
+      order.orderNumber,
+      order
+    );
 
-console.log(
-`[PAYMENT CONFIRMED] ${order.orderNumber} - ${transactionId}`
-);
+    saveOrdersToDisk();
 
-res.json({
-ok:true,
-order
-});
+    console.log(
+      `[PAYMENT CONFIRMED] ${order.orderNumber} - ${transactionId}`
+    );
 
-}
+    res.json({
+      ok:true,
+      order
+    });
+
+  }
 );
 
 // ======================================================
@@ -3641,18 +3907,18 @@ order
 // ======================================================
 
 app.get(
-"/",
-(req,res)=>{
+  "/",
+  (req, res) => {
 
-res.sendFile(
-path.join(
-__dirname,
-"public",
-"index.html"
-)
-);
+    res.sendFile(
+      path.join(
+        __dirname,
+        "public",
+        "index.html"
+      )
+    );
 
-}
+  }
 );
 
 // ======================================================
@@ -3660,15 +3926,16 @@ __dirname,
 // ======================================================
 
 app.listen(
-PORT,
-()=>{
-console.log(
-`ABESHA STORE running on port ${PORT}`
-);
+  PORT,
+  () => {
 
-console.log(
-`Pricing USD → SDG: ${USD_TO_SDG}`
-);
+    console.log(
+      `ABESHA STORE running on port ${PORT}`
+    );
 
-}
+    console.log(
+      `Pricing USD → SDG: ${USD_TO_SDG}`
+    );
+
+  }
 );
