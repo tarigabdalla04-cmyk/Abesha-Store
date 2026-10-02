@@ -1402,30 +1402,44 @@ function render(){
   }
 
   const LIMIT = 120;
-  const visible = state.filtered.slice(0, LIMIT);
+  const LIMIT = 120;
+
+function drawProducts(){
+  const visibleCount = Math.min(
+    state.visibleCount,
+    state.filtered.length
+  );
+
+  const visible = state.filtered.slice(0, visibleCount);
 
   productsBox.innerHTML = visible.map(renderProduct).join("");
 
-  if(state.filtered.length > LIMIT){
+  if(visibleCount < state.filtered.length){
     productsBox.innerHTML += `
-      <div class="empty" style="cursor:pointer"
-           id="loadMoreProducts">
+      <div
+        class="empty"
+        style="cursor:pointer"
+        id="loadMoreProducts"
+      >
         عرض المزيد من المنتجات
         <br>
         <small>
-          تم عرض ${visible.length.toLocaleString()} من
+          تم عرض ${visibleCount.toLocaleString()} من
           ${state.filtered.length.toLocaleString()}
         </small>
       </div>
     `;
 
     $("loadMoreProducts").addEventListener("click",()=>{
-      productsBox.innerHTML = state.filtered.map(renderProduct).join("");
-      bindProductButtons();
+      state.visibleCount += LIMIT;
+      drawProducts();
     });
   }
 
   bindProductButtons();
+}
+
+drawProducts();
 }
 
 
