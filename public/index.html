@@ -977,43 +977,117 @@ function usdOf(p){
 
 function categoryOf(p){
 
-  const t = (
-    (p.category || "") +
-    " " +
-    (p.type || "") +
-    " " +
-    nameOf(p)
-  ).toLowerCase();
+    const family = String(
+        p.family ||
+        p.product_family ||
+        p.productFamily ||
+        ""
+    ).toLowerCase();
 
-  if(t.includes("steam"))
-    return "steam";
+    const type = String(
+        p.type ||
+        ""
+    ).toLowerCase();
 
-  if(
-    t.includes("gift") ||
-    t.includes("google") ||
-    t.includes("apple") ||
-    t.includes("playstation") ||
-    t.includes("xbox")
-  )
-    return "gift";
+    const text = [
+        p.category,
+        p.subcategory,
+        p.type,
+        p.brand,
+        p.name,
+        p.title,
+        p.product_name,
+        p.productName,
+        p.description,
+        p.platform,
+        p.tags
+    ]
+    .flat()
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 
-  if(
-    t.includes("netflix") ||
-    t.includes("spotify") ||
-    t.includes("subscription")
-  )
-    return "subscription";
+    /* STEAM */
+    if(
+        family === "steam" ||
+        type === "steam" ||
+        /\bsteam\b/.test(text)
+    ){
+        return "steam";
+    }
 
-  if(
-    t.includes("pubg") ||
-    t.includes("free fire") ||
-    t.includes("roblox") ||
-    t.includes("valorant")
-  )
-    return "mobile";
+    /* GIFT CARDS */
+    if(
+        family === "giftcard" ||
+        family === "gift_card" ||
+        family === "gift-card" ||
+        type === "gift_card" ||
+        type === "giftcard" ||
+        text.includes("gift card") ||
+        text.includes("giftcard") ||
+        text.includes("google play") ||
+        text.includes("apple gift") ||
+        text.includes("playstation") ||
+        text.includes("xbox") ||
+        text.includes("nintendo")
+    ){
+        return "gift";
+    }
 
-  return "game";
+    /* SUBSCRIPTIONS */
+    const subscriptionWords = [
+        "subscription",
+        "membership",
+        "netflix",
+        "spotify",
+        "game pass",
+        "xbox game pass",
+        "playstation plus",
+        "ps plus",
+        "apple music",
+        "youtube premium",
+        "prime video",
+        "disney plus",
+        "disney+",
+        "crunchyroll",
+        "discord nitro"
+    ];
 
+    if(
+        family === "subscription" ||
+        type === "subscription" ||
+        subscriptionWords.some(word => text.includes(word))
+    ){
+        return "subscription";
+    }
+
+    /* GAME TOPUPS */
+    if(
+        family === "topup" ||
+        type === "topup"
+    ){
+        return "mobile";
+    }
+
+    /* GAME KEYS */
+    if(
+        family === "gamekey" ||
+        family === "game_key" ||
+        family === "game-key" ||
+        type === "game_key" ||
+        type === "gamekey"
+    ){
+        return "game";
+    }
+
+    /* POPULAR GAME TOPUPS */
+    if(
+        /\b(pubg|free fire|roblox|valorant|mobile legends|call of duty mobile)\b/.test(text)
+    ){
+        return "mobile";
+    }
+
+    return "game";
 }
 
 
