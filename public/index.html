@@ -946,15 +946,20 @@ function nameOf(p){
   );
 
 }
-
-
 function typeOf(p){
 
-  return p.type ||
-         p.category ||
-         "Digital";
+  const category = categoryOf(p);
 
+  if(category === "mobile") return "شحن ألعاب";
+  if(category === "gift") return "بطاقة هدية";
+  if(category === "subscription") return "اشتراك";
+  if(category === "steam") return "Steam";
+  if(category === "game") return "لعبة";
+
+  return "منتج رقمي";
 }
+
+
 
 
 function usdOf(p){
