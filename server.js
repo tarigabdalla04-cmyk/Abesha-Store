@@ -309,12 +309,10 @@ async function getAllCategories(endpoint) {
   const items = [];
   let cursor = null;
 
-  // Fazer v2 uses cursor pagination for the family catalogs.
-  // Do not send a legacy `limit` parameter to these family endpoints.
   for (let page = 0; page < 100; page++) {
     const query = cursor
-      ? `?cursor=${encodeURIComponent(cursor)}`
-      : "";
+      ? `?limit=24&cursor=${encodeURIComponent(cursor)}`
+      : "?limit=24";
 
     const data = await fazerGet(`${endpoint}${query}`);
     const pageItems = getArray(data, ["items", "categories", "games"]);
