@@ -2,7 +2,7 @@
   "name": "abesha-store",
   "version": "1.0.0",
   "private": true,
-  "description": "ABESHA STORE backend",
+  "description": "ABESHA STORE - Railway/FazerCards connector",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,6 +11,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "pg": "^8.16.3"
   }
 }
