@@ -310,12 +310,23 @@ async function getAllCategories(endpoint) {
   let cursor = null;
 
   for (let page = 0; page < 100; page++) {
-    const query = cursor
-      ? `?limit=24&cursor=${encodeURIComponent(cursor)}`
-      : "?limit=24";
+    const params = new URLSearchParams();
 
-    const data = await fazerGet(`${endpoint}${query}`);
-    const pageItems = getArray(data, ["items", "categories", "games"]);
+    // Fazer documents limit for all family catalog endpoints.
+    params.set("limit", "50");
+
+    if (cursor) {
+      params.set("cursor", cursor);
+    }
+
+    const data = await fazerGet(
+      `${endpoint}?${params.toString()}`
+    );
+
+    const pageItems = getArray(
+      data,
+      ["items", "categories", "games"]
+    );
 
     if (pageItems.length) {
       items.push(...pageItems);
