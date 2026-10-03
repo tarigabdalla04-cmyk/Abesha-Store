@@ -141,6 +141,20 @@ async function initDatabase() {
       fields_json JSONB NOT NULL DEFAULT '{}'::jsonb
     );
     CREATE INDEX IF NOT EXISTS order_items_order_idx ON order_items(order_id);
+    CREATE TABLE IF NOT EXISTS catalog_cache (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      version INTEGER NOT NULL,
+      built_at BIGINT NOT NULL,
+      usd_to_sdg NUMERIC(14,4) NOT NULL,
+      products_json JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS store_settings (
+      id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      version INTEGER NOT NULL,
+      settings_json JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
   await dbPool.query("DELETE FROM sessions WHERE expires_at < NOW()");
   console.log("[DB] PostgreSQL ready");
@@ -185,6 +199,104 @@ function requireDatabase(res) {
   return true;
 }
 
+async function loadPriceCacheFromDatabase() {
+  if (!dbPool) return false;
+
+  try {
+    const result = await dbPool.query(`
+      SELECT version, built_at, products_json
+      FROM catalog_cache
+      WHERE id = 1
+      LIMIT 1
+    `);
+
+    const row = result.rows[0];
+    if (!row || Number(row.version) !== PRICE_CACHE_VERSION) return false;
+
+    const products = row.products_json;
+    const builtAt = Number(row.built_at);
+
+    if (!Array.isArray(products) || !products.length || !Number.isFinite(builtAt)) {
+      return false;
+    }
+
+    pricedCatalogCache = products;
+    pricedCatalogBuiltAt = builtAt;
+    console.log(`[PRICE CACHE] Loaded ${products.length} products from PostgreSQL`);
+    return true;
+  } catch (error) {
+    console.warn("[PRICE CACHE] Could not load catalog from PostgreSQL:", error.message);
+    return false;
+  }
+}
+
+async function savePriceCacheToDatabase(products, builtAt = Date.now()) {
+  if (!dbPool || !Array.isArray(products) || !products.length) return false;
+
+  try {
+    await dbPool.query(`
+      INSERT INTO catalog_cache (id, version, built_at, usd_to_sdg, products_json, updated_at)
+      VALUES (1, $1, $2, $3, $4::jsonb, NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        version = EXCLUDED.version,
+        built_at = EXCLUDED.built_at,
+        usd_to_sdg = EXCLUDED.usd_to_sdg,
+        products_json = EXCLUDED.products_json,
+        updated_at = NOW()
+    `, [PRICE_CACHE_VERSION, builtAt, getPricingConfig().usdToSdg, JSON.stringify(products)]);
+    return true;
+  } catch (error) {
+    console.warn("[PRICE CACHE] Could not save catalog to PostgreSQL:", error.message);
+    return false;
+  }
+}
+
+
+async function loadStoreSettingsFromDatabase() {
+  if (!dbPool) return false;
+
+  try {
+    const result = await dbPool.query(`
+      SELECT version, settings_json
+      FROM store_settings
+      WHERE id = 1
+      LIMIT 1
+    `);
+
+    const row = result.rows[0];
+    if (!row || Number(row.version) !== STORE_SETTINGS_VERSION) return false;
+
+    const parsed = row.settings_json;
+    if (!parsed || typeof parsed !== "object") return false;
+
+    storeSettings = normalizeStoreSettings(parsed);
+    console.log("[STORE SETTINGS] Loaded settings from PostgreSQL");
+    return true;
+  } catch (error) {
+    console.warn("[STORE SETTINGS] Could not load settings from PostgreSQL:", error.message);
+    return false;
+  }
+}
+
+async function saveStoreSettingsToDatabase(settings) {
+  if (!dbPool || !settings || typeof settings !== "object") return false;
+
+  try {
+    await dbPool.query(`
+      INSERT INTO store_settings (id, version, settings_json, updated_at)
+      VALUES (1, $1, $2::jsonb, NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        version = EXCLUDED.version,
+        settings_json = EXCLUDED.settings_json,
+        updated_at = NOW()
+    `, [STORE_SETTINGS_VERSION, JSON.stringify(settings)]);
+    return true;
+  } catch (error) {
+    console.warn("[STORE SETTINGS] Could not save settings to PostgreSQL:", error.message);
+    return false;
+  }
+}
+
 // ======================================================
 // ABESHA STORE — التسعير المركزي
 // ======================================================
@@ -199,7 +311,6 @@ const STORE_SETTINGS_VERSION = 1;
 
 let pricedCatalogCache = null;
 let pricedCatalogBuiltAt = 0;
-let priceRefreshPromise = null;
 
 // ======================================================
 // إعدادات Express
@@ -244,11 +355,7 @@ async function fazerFetch(endpoint, options = {}) {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const normalizedEndpoint = endpoint.startsWith("/")
-  ? endpoint
-  : `/${endpoint}`;
-
-const response = await fetch(`${FAZER_API}${normalizedEndpoint}`, {
+      const response = await fetch(`${FAZER_API}${endpoint}`, {
         ...options,
         method: options.method || "GET",
         headers: {
@@ -313,24 +420,15 @@ async function getAllCategories(endpoint) {
   const items = [];
   let cursor = null;
 
+  // Fazer v2 uses cursor pagination for the family catalogs.
+  // Do not send a legacy `limit` parameter to these family endpoints.
   for (let page = 0; page < 100; page++) {
-    const params = new URLSearchParams();
+    const query = cursor
+      ? `?cursor=${encodeURIComponent(cursor)}`
+      : "";
 
-    // Fazer documents limit for all family catalog endpoints.
-    params.set("limit", "50");
-
-    if (cursor) {
-      params.set("cursor", cursor);
-    }
-
-    const data = await fazerGet(
-      `${endpoint}?${params.toString()}`
-    );
-
-    const pageItems = getArray(
-      data,
-      ["items", "categories", "games"]
-    );
+    const data = await fazerGet(`${endpoint}${query}`);
+    const pageItems = getArray(data, ["items", "categories", "games"]);
 
     if (pageItems.length) {
       items.push(...pageItems);
@@ -522,6 +620,39 @@ function cloneDefaultStoreSettings() {
   return JSON.parse(JSON.stringify(DEFAULT_STORE_SETTINGS));
 }
 
+function normalizeStoreSettings(parsed) {
+  const defaults = cloneDefaultStoreSettings();
+  const pricing = parsed && parsed.pricing && typeof parsed.pricing === "object"
+    ? parsed.pricing
+    : {};
+
+  const tiers = Array.isArray(pricing.tiers) && pricing.tiers.length === 4
+    ? pricing.tiers.map((tier, index) => ({
+        maxCost: tier.maxCost == null ? null : Number(tier.maxCost),
+        markup: Number(tier.markup)
+      })).filter(t => Number.isFinite(t.markup) && t.markup >= 0)
+    : defaults.pricing.tiers;
+
+  return {
+    ...defaults,
+    ...(parsed && typeof parsed === "object" ? parsed : {}),
+    publishedIds: Array.isArray(parsed?.publishedIds) ? parsed.publishedIds : [],
+    hiddenIds: Array.isArray(parsed?.hiddenIds) ? parsed.hiddenIds : [],
+    discounts: parsed?.discounts && typeof parsed.discounts === "object"
+      ? parsed.discounts
+      : {},
+    pricing: {
+      ...defaults.pricing,
+      ...pricing,
+      usdToSdg: Number.isFinite(Number(pricing.usdToSdg)) && Number(pricing.usdToSdg) > 0
+        ? Number(pricing.usdToSdg)
+        : defaults.pricing.usdToSdg,
+      tiers: tiers.length === 4 ? tiers : defaults.pricing.tiers,
+      rounding: { ...defaults.pricing.rounding, ...(pricing.rounding || {}) }
+    }
+  };
+}
+
 function loadStoreSettings() {
   try {
     if (!fs.existsSync(STORE_SETTINGS_FILE)) {
@@ -531,51 +662,10 @@ function loadStoreSettings() {
     }
 
     const parsed = JSON.parse(fs.readFileSync(STORE_SETTINGS_FILE, "utf8"));
-    const defaults = cloneDefaultStoreSettings();
-    const pricing = parsed.pricing && typeof parsed.pricing === "object"
-      ? parsed.pricing
-      : {};
-
-    const tiers = Array.isArray(pricing.tiers) && pricing.tiers.length === 4
-      ? pricing.tiers.map((tier, index) => ({
-          maxCost: tier.maxCost == null ? null : Number(tier.maxCost),
-          markup: Number(tier.markup)
-        })).filter(t => Number.isFinite(t.markup) && t.markup >= 0)
-      : defaults.pricing.tiers;
-
-    return {
-      ...defaults,
-      ...parsed,
-      publishedIds: Array.isArray(parsed.publishedIds) ? parsed.publishedIds : [],
-      hiddenIds: Array.isArray(parsed.hiddenIds) ? parsed.hiddenIds : [],
-      discounts: parsed.discounts && typeof parsed.discounts === "object"
-        ? parsed.discounts
-        : {},
-      pricing: {
-        ...defaults.pricing,
-        ...pricing,
-        usdToSdg: Number.isFinite(Number(pricing.usdToSdg)) && Number(pricing.usdToSdg) > 0
-          ? Number(pricing.usdToSdg)
-          : defaults.pricing.usdToSdg,
-        tiers: tiers.length === 4 ? tiers : defaults.pricing.tiers,
-        rounding: { ...defaults.pricing.rounding, ...(pricing.rounding || {}) }
-      }
-    };
+    return normalizeStoreSettings(parsed);
   } catch (error) {
     console.warn("[STORE SETTINGS] Could not load settings:", error.message);
     return cloneDefaultStoreSettings();
-  }
-}
-
-function saveStoreSettings(settings) {
-  try {
-    fs.writeFileSync(
-      STORE_SETTINGS_FILE,
-      JSON.stringify(settings, null, 2),
-      "utf8"
-    );
-  } catch (error) {
-    console.warn("[STORE SETTINGS] Could not save settings:", error.message);
   }
 }
 
@@ -740,9 +830,10 @@ function getPublicProducts(products) {
     .map(enrichProductForStore);
 }
 
-function saveStoreSettingsNow() {
+async function saveStoreSettingsNow() {
   storeSettings.version = STORE_SETTINGS_VERSION;
   saveStoreSettings(storeSettings);
+  await saveStoreSettingsToDatabase(storeSettings);
 }
 
 // ======================================================
@@ -802,12 +893,66 @@ function savePriceCacheToDisk(products) {
   }
 }
 
+function cacheIsAvailable() {
+  return Array.isArray(pricedCatalogCache) && pricedCatalogCache.length > 0;
+}
+
 function cacheIsFresh() {
   return (
-    Array.isArray(pricedCatalogCache) &&
-    pricedCatalogCache.length > 0 &&
+    cacheIsAvailable() &&
+    Number.isFinite(pricedCatalogBuiltAt) &&
+    pricedCatalogBuiltAt > 0 &&
     Date.now() - pricedCatalogBuiltAt < CACHE_TTL_MS
   );
+}
+
+function repriceCachedCatalog() {
+  if (!cacheIsAvailable()) {
+    throw new Error("Pricing catalog cache is unavailable");
+  }
+
+  const pricing = getPricingConfig();
+  let repriced = 0;
+
+  pricedCatalogCache = pricedCatalogCache.map(product => {
+    const sourceUsd = Number(product.source_price_usd);
+
+    if (!Number.isFinite(sourceUsd) || sourceUsd <= 0) {
+      return {
+        ...product,
+        price_usd: null,
+        cost_sdg: null,
+        markup_percent: null,
+        price_sdg: null,
+        pricing_mode: "unavailable"
+      };
+    }
+
+    const costSdg = Math.round(sourceUsd * pricing.usdToSdg);
+    const saleSdg = calculateSalePrice(sourceUsd);
+
+    repriced += 1;
+
+    return {
+      ...product,
+      price_usd: frontendCompatibleUsd(saleSdg),
+      source_price_usd: sourceUsd,
+      cost_sdg: costSdg,
+      markup_percent: getMarkupForCost(costSdg) * 100,
+      price_sdg: saleSdg,
+      pricing_mode: "automatic"
+    };
+  });
+
+  pricedCatalogBuiltAt = Date.now();
+  savePriceCacheToDisk(pricedCatalogCache);
+  void savePriceCacheToDatabase(pricedCatalogCache, pricedCatalogBuiltAt);
+
+  console.log(
+    `[PRICE CACHE] Repriced ${pricedCatalogCache.length} cached products; ${repriced} have usable source prices`
+  );
+
+  return pricedCatalogCache;
 }
 
 // ======================================================
@@ -852,6 +997,11 @@ async function mapWithConcurrency(items, worker, concurrency = 2) {
 async function getTopupOffers(categoryId) {
   const data = await fazerGet(
     `/topups/offers?category_id=${encodeURIComponent(categoryId)}`,
+    30000
+  );
+
+  return getArray(data, ["items", "offers"]);
+}
     30000
   );
 
@@ -1098,37 +1248,19 @@ async function buildPricedCatalog() {
   pricedCatalogBuiltAt = Date.now();
 
   savePriceCacheToDisk(products);
+  void savePriceCacheToDatabase(products, pricedCatalogBuiltAt);
 
   return products;
 }
 
 async function getPricedCatalog() {
-  if (cacheIsFresh()) {
+  if (cacheIsAvailable()) {
     return pricedCatalogCache;
   }
 
-  if (priceRefreshPromise) {
-    return priceRefreshPromise;
-  }
-
-  priceRefreshPromise = buildPricedCatalog()
-    .catch(error => {
-      console.error(
-        "[PRICE CACHE] Build failed:",
-        error.message
-      );
-
-      if (Array.isArray(pricedCatalogCache) && pricedCatalogCache.length) {
-        return pricedCatalogCache;
-      }
-
-      throw error;
-    })
-    .finally(() => {
-      priceRefreshPromise = null;
-    });
-
-  return priceRefreshPromise;
+  throw new Error(
+    "Pricing catalog is not available locally. Automatic Fazer catalog rebuild is disabled."
+  );
 }
 
 loadPriceCacheFromDisk();
@@ -1144,6 +1276,7 @@ app.get("/health", (req, res) => {
     status: "running",
     pricing: {
       usdToSdg: getPricingConfig().usdToSdg,
+      cacheAvailable: cacheIsAvailable(),
       cacheFresh: cacheIsFresh(),
       cachedProducts: pricedCatalogCache?.length || 0
     }
@@ -1154,7 +1287,7 @@ app.get("/health", (req, res) => {
 // Fazer /me
 // ======================================================
 
-app.get("/api/fazer/me", async (req, res) => {
+app.get("/api/fazer/me", requireAdmin, async (req, res) => {
   try {
     const data = await fazerGet("/me");
     res.json(data);
@@ -1171,7 +1304,7 @@ app.get("/api/fazer/me", async (req, res) => {
 // Fazer catalog
 // ======================================================
 
-app.get("/api/fazer/catalog", async (req, res) => {
+app.get("/api/fazer/catalog", requireAdmin, async (req, res) => {
   try {
     // Fazer v2 has no unified /catalog endpoint. Build this compatibility
     // response from the documented family-specific catalogs instead.
@@ -1207,7 +1340,7 @@ app.get("/api/fazer/catalog", async (req, res) => {
 // Topups
 // ======================================================
 
-app.get("/api/fazer/topups", async (req, res) => {
+app.get("/api/fazer/topups", requireAdmin, async (req, res) => {
   try {
     const items = await getAllCategories("topups");
 
@@ -1231,7 +1364,7 @@ app.get("/api/fazer/topups", async (req, res) => {
   }
 });
 
-app.get("/api/fazer/topups/offers", async (req, res) => {
+app.get("/api/fazer/topups/offers", requireAdmin, async (req, res) => {
   try {
     const categoryId = req.query.category_id;
 
@@ -1260,7 +1393,7 @@ app.get("/api/fazer/topups/offers", async (req, res) => {
 // Gift Cards
 // ======================================================
 
-app.get("/api/fazer/giftcards", async (req, res) => {
+app.get("/api/fazer/giftcards", requireAdmin, async (req, res) => {
   try {
     const items = await getAllCategories("giftcards");
 
@@ -1284,7 +1417,7 @@ app.get("/api/fazer/giftcards", async (req, res) => {
   }
 });
 
-app.get("/api/fazer/giftcards/cards", async (req, res) => {
+app.get("/api/fazer/giftcards/cards", requireAdmin, async (req, res) => {
   try {
     const categoryId = req.query.category_id;
 
@@ -1339,29 +1472,18 @@ app.get("/api/products", async (req, res) => {
 // تحديث الأسعار يدويًا عند الحاجة
 // ======================================================
 
-app.post("/api/prices/refresh", async (req, res) => {
+app.post("/api/prices/refresh", requireAdmin, async (req, res) => {
   try {
-    const adminKey = req.headers["x-admin-key"];
-
-    if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY) {
-      return res.status(401).json({
-        ok: false,
-        error: "Unauthorized"
-      });
-    }
-
-    pricedCatalogCache = null;
-    pricedCatalogBuiltAt = 0;
-
-    const products = await getPricedCatalog();
+    const products = repriceCachedCatalog();
 
     res.json({
       ok: true,
       total: products.length,
-      refreshedAt: new Date().toISOString()
+      refreshedAt: new Date().toISOString(),
+      source: "local-cache"
     });
   } catch (error) {
-    res.status(500).json({
+    res.status(503).json({
       ok: false,
       error: error.message
     });
@@ -1372,7 +1494,7 @@ app.post("/api/prices/refresh", async (req, res) => {
 // PUBG ID validation
 // ======================================================
 
-app.post("/api/fazer/topups/validate-id", async (req, res) => {
+app.post("/api/fazer/topups/validate-id", requireAdmin, async (req, res) => {
   try {
     const { category_id, fields } = req.body;
 
@@ -1404,7 +1526,7 @@ app.post("/api/fazer/topups/validate-id", async (req, res) => {
 // Game Keys
 // ======================================================
 
-app.get("/api/fazer/gamekeys", async (req, res) => {
+app.get("/api/fazer/gamekeys", requireAdmin, async (req, res) => {
   try {
     const items = await getAllCategories("gamekeys");
 
@@ -1432,7 +1554,7 @@ app.get("/api/fazer/gamekeys", async (req, res) => {
 // Steam
 // ======================================================
 
-app.get("/api/fazer/steam-topup/rates", async (req, res) => {
+app.get("/api/fazer/steam-topup/rates", requireAdmin, async (req, res) => {
   try {
     const data = await fazerGet("/steam-topup/rates");
     res.json(data);
@@ -1445,7 +1567,7 @@ app.get("/api/fazer/steam-topup/rates", async (req, res) => {
   }
 });
 
-app.get("/api/fazer/steam-gifts/games", async (req, res) => {
+app.get("/api/fazer/steam-gifts/games", requireAdmin, async (req, res) => {
   try {
     const limit = req.query.limit || "100";
 
@@ -1467,7 +1589,7 @@ app.get("/api/fazer/steam-gifts/games", async (req, res) => {
 // الكتالوج الموحد القديم — محفوظ للتوافق
 // ======================================================
 
-app.get("/api/catalog", async (req, res) => {
+app.get("/api/catalog", requireAdmin, async (req, res) => {
   try {
     const familyResults = await Promise.allSettled([
       getAllCategories("topups"),
@@ -1672,19 +1794,17 @@ app.post("/api/admin/pricing", requireAdmin, async (req, res) => {
       }
     };
 
-    saveStoreSettingsNow();
+    void saveStoreSettingsNow();
 
-    // New exchange rate/markup must immediately invalidate old calculated prices.
-    pricedCatalogCache = null;
-    pricedCatalogBuiltAt = 0;
-    savePriceCacheToDisk([]);
-
-    const products = await getPricedCatalog();
+    // Recalculate existing cached products locally.
+    // Never rebuild the catalog from Fazer as a side effect of a pricing change.
+    const products = repriceCachedCatalog();
 
     res.json({
       ok: true,
       pricing: getPricingConfig(),
       repricedProducts: products.length,
+      source: "local-cache",
       updatedAt: new Date().toISOString()
     });
   } catch (error) {
@@ -1703,7 +1823,7 @@ app.post("/api/admin/catalog/mode", requireAdmin, (req, res) => {
   }
 
   storeSettings.catalogMode = mode;
-  saveStoreSettingsNow();
+  void saveStoreSettingsNow();
 
   res.json({
     ok: true,
@@ -1727,7 +1847,7 @@ app.post("/api/admin/catalog/publish", requireAdmin, (req, res) => {
     storeSettings.publishedIds.push(productId);
   }
 
-  saveStoreSettingsNow();
+  void saveStoreSettingsNow();
 
   res.json({
     ok: true,
@@ -1751,7 +1871,7 @@ app.post("/api/admin/catalog/unpublish", requireAdmin, (req, res) => {
     new Set([...storeSettings.hiddenIds, productId])
   );
 
-  saveStoreSettingsNow();
+  void saveStoreSettingsNow();
 
   res.json({
     ok: true,
@@ -1779,7 +1899,7 @@ app.post("/api/admin/catalog/discount", requireAdmin, (req, res) => {
   }
 
   storeSettings.discounts[productId] = discount;
-  saveStoreSettingsNow();
+  void saveStoreSettingsNow();
 
   res.json({
     ok: true,
@@ -1792,7 +1912,7 @@ app.delete("/api/admin/catalog/discount/:productId", requireAdmin, (req, res) =>
   const productId = String(req.params.productId || "").trim();
 
   delete storeSettings.discounts[productId];
-  saveStoreSettingsNow();
+  void saveStoreSettingsNow();
 
   res.json({
     ok: true,
@@ -1881,9 +2001,8 @@ button.primary{background:#1769aa}button.danger{background:#7d2633}
 let key="";
 let data=[];
 let settings={};
-
 function esc(s){
-  return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#039;"}[m]));
+  return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[m]));
 }
 function headers(){return {"Content-Type":"application/json","x-admin-key":key}}
 function msg(t){document.getElementById("msg").textContent=t||""}
@@ -2316,6 +2435,23 @@ app.get("/", (req, res) => {
 (async () => {
   try {
     await initDatabase();
+    if (dbPool) {
+      const settingsLoaded = await loadStoreSettingsFromDatabase();
+
+      if (!settingsLoaded) {
+        await saveStoreSettingsToDatabase(storeSettings);
+        console.log("[STORE SETTINGS] Migrated local settings to PostgreSQL");
+      }
+
+      // PostgreSQL is the persistent source of truth for the catalog cache.
+      // Only fall back to the local file when PostgreSQL has no usable cache.
+      const loadedFromDatabase = await loadPriceCacheFromDatabase();
+
+      if (!loadedFromDatabase && cacheIsAvailable()) {
+        await savePriceCacheToDatabase(pricedCatalogCache, pricedCatalogBuiltAt);
+        console.log(`[PRICE CACHE] Migrated ${pricedCatalogCache.length} products from local disk to PostgreSQL`);
+      }
+    }
   } catch (error) {
     console.error("[DB] Initialization failed:", error.message);
   }
