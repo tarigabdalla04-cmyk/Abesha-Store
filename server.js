@@ -244,7 +244,11 @@ async function fazerFetch(endpoint, options = {}) {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(`${FAZER_API}${endpoint}`, {
+      const normalizedEndpoint = endpoint.startsWith("/")
+  ? endpoint
+  : `/${endpoint}`;
+
+const response = await fetch(`${FAZER_API}${normalizedEndpoint}`, {
         ...options,
         method: options.method || "GET",
         headers: {
