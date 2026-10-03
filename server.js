@@ -652,6 +652,21 @@ function normalizeStoreSettings(parsed) {
     }
   };
 }
+function saveStoreSettings(settings) {
+  try {
+    fs.writeFileSync(
+      STORE_SETTINGS_FILE,
+      JSON.stringify(normalizeStoreSettings(settings), null, 2),
+      "utf8"
+    );
+    return true;
+  } catch (error) {
+    console.warn("[STORE SETTINGS] Could not save settings:", error.message);
+    return false;
+  }
+}
+
+function loadStoreSettings() {
 
 function loadStoreSettings() {
   try {
@@ -2449,11 +2464,20 @@ app.get("/", (req, res) => {
       // PostgreSQL is the persistent source of truth for the catalog cache.
       // Only fall back to the local file when PostgreSQL has no usable cache.
       const loadedFromDatabase = await loadPriceCacheFromDatabase();
+if (!loadedFromDatabase && cacheIsAvailable()) {
+  await savePriceCacheToDatabase(pricedCatalogCache, pricedCatalogBuiltAt);
+  console.log(`[PRICE CACHE] Migrated ${pricedCatalogCache.length} products from local disk to PostgreSQL`);
+} else if (!loadedFromDatabase && !cacheIsAvailable()) {
+  console.log("[PRICE CACHE] No catalog cache found. Building the catalog once from Fazer...");
 
-      if (!loadedFromDatabase && cacheIsAvailable()) {
-        await savePriceCacheToDatabase(pricedCatalogCache, pricedCatalogBuiltAt);
-        console.log(`[PRICE CACHE] Migrated ${pricedCatalogCache.length} products from local disk to PostgreSQL`);
-      }
+  try {
+    const products = await buildPricedCatalog();
+    console.log(`[PRICE CACHE] Initial catalog build completed: ${products.length} products`);
+  } catch (error) {
+    console.error("[PRICE CACHE] Initial catalog build failed:", error.message);
+  }
+}
+      
     }
   } catch (error) {
     console.error("[DB] Initialization failed:", error.message);
