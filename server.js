@@ -993,7 +993,6 @@ async function mapWithConcurrency(items, worker, concurrency = 2) {
 // ======================================================
 // بناء الكتالوج المسعّر
 // ======================================================
-
 async function getTopupOffers(categoryId) {
   const data = await fazerGet(
     `/topups/offers?category_id=${encodeURIComponent(categoryId)}`,
@@ -1002,6 +1001,9 @@ async function getTopupOffers(categoryId) {
 
   return getArray(data, ["items", "offers"]);
 }
+async function getTopupOffers(categoryId) {
+  const data = await fazerGet(
+    `/topups/offers?category_id=${encodeURIComponent(categoryId)}`,
     30000
   );
 
@@ -1025,6 +1027,7 @@ async function getGameKeyOffers(gameId) {
 
   return getArray(data, ["keys", "items", "offers"]);
 }
+
 
 async function buildPricedCatalog() {
   console.log("[PRICE CACHE] Building complete priced catalog...");
