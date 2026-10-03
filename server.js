@@ -1,4012 +1,664 @@
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const crypto = require("crypto");
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-const FAZER_API = "https://api.fzr.cards/api/v2";
-const USD_TO_SDG = 8250;
-
-const PRICING_TIERS = [
-  { maxCost: 20000, markup: 0.07 },
-  { maxCost: 100000, markup: 0.08 },
-  { maxCost: 300000, markup: 0.09 },
-  { maxCost: Infinity, markup: 0.10 }
-];
-
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const PRICE_CACHE_VERSION = 8;
-
-const PRICE_CACHE_FILE = path.join(__dirname, "pricing-cache.json");
-const STORE_SETTINGS_FILE = path.join(__dirname, "store-settings.json");
-const ORDERS_FILE = path.join(__dirname, "orders.json");
-
-let pricedCatalogCache = null;
-let pricedCatalogBuiltAt = 0;
-let priceRefreshPromise = null;
-
-const DEFAULT_STORE_SETTINGS = {
-  version: 1,
-  catalogMode: "all",
-  publishedIds: [],
-  hiddenIds: [],
-  discounts: {}
-};
-
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname, "public")));
-
-/* ======================================================
-   FILE HELPERS
-====================================================== */
-
-function jsonFileRead(file, fallback) {
-  try {
-    if (!fs.existsSync(file)) return fallback;
-    return JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch (error) {
-    console.warn("[FILE READ]", file, error.message);
-    return fallback;
-  }
-}
-
-function jsonFileWrite(file, value) {
-  try {
-    fs.writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
-    return true;
-  } catch (error) {
-    console.warn("[FILE WRITE]", file, error.message);
-    return false;
-  }
-}
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function normalizeEndpoint(endpoint) {
-  const value = String(endpoint || "").trim();
-  if (!value) return "";
-  return value.startsWith("/") ? value : "/" + value;
-}
-
-/* ======================================================
-   FAZER API
-====================================================== */
-
-function requireFazerKey() {
-  if (!process.env.FAZER_API_KEY) {
-    const error = new Error("FAZER_API_KEY is not configured");
-    error.status = 500;
-    throw error;
-  }
-}
-
-function fazerHeaders(extra) {
-  return Object.assign(
-    {
-      "X-API-Key": process.env.FAZER_API_KEY,
-      "Accept": "application/json"
-    },
-    extra || {}
-  );
-}
-
-async function fazerFetch(endpoint, options) {
-  requireFazerKey();
-
-  const opts = Object.assign({}, options || {});
-  const timeoutMs =
-    Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 30000;
-
-  delete opts.timeoutMs;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const url = FAZER_API + normalizeEndpoint(endpoint);
-
-    const response = await fetch(
-      url,
-      Object.assign({}, opts, {
-        headers: fazerHeaders(opts.headers),
-        signal: controller.signal
-      })
-    );
-
-    const text = await response.text();
-    let data = {};
-
-    try {
-      data = text ? JSON.parse(text) : {};
-    } catch (_) {
-      data = { raw: text };
-    }
-
-    if (!response.ok) {
-      const error = new Error(
-        data && (data.message || data.error)
-          ? data.message || data.error
-          : "Fazer API HTTP " + response.status
-      );
-
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-
-    return data;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function fazerGet(endpoint, timeoutMs) {
-  return fazerFetch(endpoint, {
-    method: "GET",
-    timeoutMs: timeoutMs || 30000
-  });
-}
-
-function getArray(data, keys) {
-  const wanted = keys || ["items", "offers", "cards", "keys"];
-
-  for (const key of wanted) {
-    if (Array.isArray(data && data[key])) {
-      return data[key];
-    }
-  }
-
-  if (Array.isArray(data)) return data;
-
-  if (Array.isArray(data && data.data)) {
-    return data.data;
-  }
-
-  if (data && data.data) {
-    for (const key of wanted) {
-      if (Array.isArray(data.data[key])) {
-        return data.data[key];
-      }
-    }
-  }
-
-  return [];
-}
-
-/* ======================================================
-   PAGINATION
-====================================================== */
-
-async function getAllCategories(endpoint) {
-  const items = [];
-  let cursor = null;
-
-  for (let page = 0; page < 100; page += 1) {
-    const params = new URLSearchParams();
-
-    params.set("limit", "200");
-
-    if (cursor) {
-      params.set("cursor", cursor);
-    }
-
-    const data = await fazerGet(
-      normalizeEndpoint(endpoint) + "?" + params.toString(),
-      30000
-    );
-
-    const pageItems = getArray(data, [
-      "items",
-      "categories",
-      "games"
-    ]);
-
-    if (pageItems.length) {
-      items.push.apply(items, pageItems);
-    }
-
-    const nextCursor =
-      (data &&
-        data.meta &&
-        data.meta.next_cursor) ||
-      (data && data.next_cursor) ||
-      (data &&
-        data.pagination &&
-        data.pagination.next_cursor) ||
-      null;
-
-    if (
-      !nextCursor ||
-      String(nextCursor) === String(cursor)
-    ) {
-      break;
-    }
-
-    const hasMore =
-      data &&
-      data.meta &&
-      typeof data.meta.has_more === "boolean"
-        ? data.meta.has_more
-        : true;
-
-    if (!hasMore) break;
-
-    cursor = String(nextCursor);
-  }
-
-  return items;
-}
-
-/* ======================================================
-   PRICING
-====================================================== */
-
-function getMarkupForCost(costSdg) {
-  const tier = PRICING_TIERS.find(
-    item => costSdg <= item.maxCost
-  );
-
-  return tier ? tier.markup : 0.10;
-}
-
-function roundCommercialPrice(value) {
-  if (!Number.isFinite(value) || value <= 0) {
-    return null;
-  }
-
-  let step = 100;
-
-  if (value >= 500000) {
-    step = 5000;
-  } else if (value >= 100000) {
-    step = 1000;
-  } else if (value >= 10000) {
-    step = 500;
-  }
-
-  return Math.ceil(value / step) * step;
-}
-
-function calculateSalePrice(priceUsd) {
-  const usd = Number(priceUsd);
-
-  if (!Number.isFinite(usd) || usd <= 0) {
-    return null;
-  }
-
-  const costSdg = usd * USD_TO_SDG;
-  const markup = getMarkupForCost(costSdg);
-
-  return roundCommercialPrice(
-    costSdg * (1 + markup)
-  );
-}
-
-function frontendCompatibleUsd(saleSdg) {
-  const sale = Number(saleSdg);
-
-  if (!Number.isFinite(sale) || sale <= 0) {
-    return null;
-  }
-
-  return sale / USD_TO_SDG;
-}
-
-function offerPriceUsd(offer) {
-  const candidates = [
-    offer && offer.price_usd,
-    offer && offer.priceUSD,
-    offer && offer.usd_price,
-    offer && offer.cost_usd,
-    offer && offer.costUSD,
-    offer && offer.price
-  ];
-
-  for (const value of candidates) {
-    const number = Number(value);
-
-    if (
-      Number.isFinite(number) &&
-      number > 0
-    ) {
-      return number;
-    }
-  }
-
-  return null;
-}
-
-function offerLabel(offer) {
-  return String(
-    (offer && offer.name) ||
-      (offer && offer.title) ||
-      (offer && offer.description) ||
-      (offer && offer.product_name) ||
-      (offer && offer.productName) ||
-      (offer && offer.amount) ||
-      (offer && offer.quantity) ||
-      (offer && offer.denomination) ||
-      "عرض"
-  ).trim();
-}
-
-/* ======================================================
-   STORE SETTINGS
-====================================================== */
-
-function loadStoreSettings() {
-  const parsed = jsonFileRead(
-    STORE_SETTINGS_FILE,
-    null
-  );
-
-  if (
-    !parsed ||
-    typeof parsed !== "object"
-  ) {
-    const fresh = clone(
-      DEFAULT_STORE_SETTINGS
-    );
-
-    jsonFileWrite(
-      STORE_SETTINGS_FILE,
-      fresh
-    );
-
-    return fresh;
-  }
-
-  return Object.assign(
-    clone(DEFAULT_STORE_SETTINGS),
-    parsed,
-    {
-      publishedIds:
-        Array.isArray(parsed.publishedIds)
-          ? parsed.publishedIds
-          : [],
-
-      hiddenIds:
-        Array.isArray(parsed.hiddenIds)
-          ? parsed.hiddenIds
-          : [],
-
-      discounts:
-        parsed.discounts &&
-        typeof parsed.discounts === "object"
-          ? parsed.discounts
-          : {}
-    }
-  );
-}
-
-let storeSettings =
-  loadStoreSettings();
-
-function saveStoreSettings() {
-  storeSettings.version = 1;
-  jsonFileWrite(
-    STORE_SETTINGS_FILE,
-    storeSettings
-  );
-}
-
-/* ======================================================
-   DISCOUNTS
-====================================================== */
-
-function normalizeDiscount(raw) {
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-
-  const type =
-    raw.type === "fixed"
-      ? "fixed"
-      : "percent";
-
-  const value = Number(raw.value);
-
-  if (
-    !Number.isFinite(value) ||
-    value <= 0
-  ) {
-    return null;
-  }
-
-  if (
-    type === "percent" &&
-    value >= 100
-  ) {
-    return null;
-  }
-
-  if (
-    type === "fixed" &&
-    value >= 100000000
-  ) {
-    return null;
-  }
-
-  let startsAt = null;
-  let endsAt = null;
-
-  try {
-    if (raw.startsAt) {
-      startsAt =
-        new Date(
-          raw.startsAt
-        ).toISOString();
-    }
-
-    if (raw.endsAt) {
-      endsAt =
-        new Date(
-          raw.endsAt
-        ).toISOString();
-    }
-  } catch (_) {
-    return null;
-  }
-
-  return {
-    type,
-    value,
-    startsAt,
-    endsAt,
-    active: raw.active !== false,
-    label: String(
-      raw.label || "عرض خاص"
-    )
-      .trim()
-      .slice(0, 100)
-  };
-}
-
-function isDiscountActive(discount) {
-  if (
-    !discount ||
-    discount.active === false
-  ) {
-    return false;
-  }
-
-  const now = Date.now();
-
-  if (discount.startsAt) {
-    const start =
-      Date.parse(
-        discount.startsAt
-      );
-
-    if (
-      Number.isFinite(start) &&
-      now < start
-    ) {
-      return false;
-    }
-  }
-
-  if (discount.endsAt) {
-    const end =
-      Date.parse(
-        discount.endsAt
-      );
-
-    if (
-      Number.isFinite(end) &&
-      now > end
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-function applyDiscount(
-  basePrice,
-  discount
-) {
-  const base = Number(basePrice);
-
-  if (
-    !Number.isFinite(base) ||
-    base <= 0 ||
-    !isDiscountActive(discount)
-  ) {
-    return {
-      price: basePrice,
-      originalPrice: null,
-      discount: null
-    };
-  }
-
-  let sale = base;
-
-  if (discount.type === "fixed") {
-    sale =
-      base -
-      Number(discount.value);
-  } else {
-    sale =
-      base *
-      (1 -
-        Number(discount.value) /
-          100);
-  }
-
-  sale = roundCommercialPrice(
-    Math.max(100, sale)
-  );
-
-  if (
-    !sale ||
-    sale >= base
-  ) {
-    return {
-      price: basePrice,
-      originalPrice: null,
-      discount: null
-    };
-  }
-
-  return {
-    price: sale,
-    originalPrice: base,
-    discount
-  };
-}
-
-/* ======================================================
-   PRODUCT VISIBILITY
-====================================================== */
-
-function productVisibility(product) {
-  const id = String(
-    (product && product.id) || ""
-  );
-
-  if (
-    storeSettings.hiddenIds.indexOf(id) !== -1
-  ) {
-    return false;
-  }
-
-  if (
-    storeSettings.catalogMode ===
-    "curated"
-  ) {
-    return (
-      storeSettings.publishedIds.indexOf(
-        id
-      ) !== -1
-    );
-  }
-
-  return true;
-}
-
-function enrichProductForStore(
-  product
-) {
-  const basePrice =
-    Number(product.price_sdg);
-
-  const discount =
-    storeSettings.discounts[
-      String(product.id)
-    ];
-
-  const pricing =
-    applyDiscount(
-      basePrice,
-      discount
-    );
-
-  const result =
-    Object.assign(
-      {},
-      product,
-      {
-        price_sdg:
-          pricing.price,
-
-        price_usd:
-          frontendCompatibleUsd(
-            pricing.price
-          ),
-
-        original_price_sdg:
-          pricing.originalPrice,
-
-        discount:
-          pricing.discount
-      }
-    );
-
-  delete result.source_price_usd;
-  delete result.cost_sdg;
-  delete result.markup_percent;
-
-  return result;
-}
-
-function getAdminProduct(product) {
-  return Object.assign(
-    {},
-    product,
-    {
-      published:
-        productVisibility(product),
-
-      discount:
-        storeSettings.discounts[
-          String(product.id)
-        ] || null
-    }
-  );
-}
-
-function getPublicProducts(
-  products
-) {
-  return products
-    .filter(productVisibility)
-    .filter(product =>
-      Number(product.price_sdg) > 0
-    )
-    .map(
-      enrichProductForStore
-    );
-}
-
-/* ======================================================
-   PRICE CACHE
-====================================================== */
-
-function loadPriceCacheFromDisk() {
-  const parsed =
-    jsonFileRead(
-      PRICE_CACHE_FILE,
-      null
-    );
-
-  if (
-    parsed &&
-    parsed.version ===
-      PRICE_CACHE_VERSION &&
-    Array.isArray(
-      parsed.products
-    ) &&
-    Number.isFinite(
-      parsed.builtAt
-    )
-  ) {
-    pricedCatalogCache =
-      parsed.products;
-
-    pricedCatalogBuiltAt =
-      parsed.builtAt;
-
-    console.log(
-      "[PRICE CACHE] Loaded " +
-        pricedCatalogCache.length +
-        " products from disk"
-    );
-  }
-}
-
-function savePriceCacheToDisk(
-  products
-) {
-  jsonFileWrite(
-    PRICE_CACHE_FILE,
-    {
-      version:
-        PRICE_CACHE_VERSION,
-
-      builtAt:
-        Date.now(),
-
-      usdToSdg:
-        USD_TO_SDG,
-
-      products
-    }
-  );
-}
-
-function cacheIsFresh() {
-  return (
-    Array.isArray(
-      pricedCatalogCache
-    ) &&
-    pricedCatalogCache.length > 0 &&
-    Date.now() -
-      pricedCatalogBuiltAt <
-      CACHE_TTL_MS
-  );
-}
-
-async function mapWithConcurrency(
-  items,
-  worker,
-  concurrency
-) {
-  const results =
-    new Array(items.length);
-
-  let nextIndex = 0;
-
-  const limit = Math.max(
-    1,
-    Math.min(
-      concurrency || 6,
-      items.length
-    )
-  );
-
-  async function runner() {
-    while (true) {
-      const index =
-        nextIndex++;
-
-      if (
-        index >=
-        items.length
-      ) {
-        return;
-      }
-
-      try {
-        results[index] =
-          await worker(
-            items[index],
-            index
-          );
-      } catch (error) {
-        results[index] = {
-          __error: true,
-          error: error.message
-        };
-      }
-    }
-  }
-
-  if (!items.length) {
-    return results;
-  }
-
-  await Promise.all(
-    Array.from(
-      {
-        length: limit
-      },
-      () => runner()
-    )
-  );
-
-  return results;
-}
-
-/* ======================================================
-   FAZER OFFERS
-====================================================== */
-
-async function getTopupOffers(
-  categoryId
-) {
-  const data =
-    await fazerGet(
-      "/topups/offers?category_id=" +
-        encodeURIComponent(
-          categoryId
-        )
-    );
-
-  return {
-    offers: getArray(
-      data,
-      ["offers", "items"]
-    ),
-
-    fields:
-      Array.isArray(
-        data && data.fields
-      )
-        ? data.fields
-        : [],
-
-    name:
-      data && data.name
-        ? data.name
-        : null,
-
-    raw: data
-  };
-}
-
-async function getGiftcardOffers(
-  categoryId
-) {
-  const data =
-    await fazerGet(
-      "/giftcards/cards?category_id=" +
-        encodeURIComponent(
-          categoryId
-        )
-    );
-
-  return {
-    offers: getArray(
-      data,
-      [
-        "offers",
-        "cards",
-        "items"
-      ]
-    ),
-
-    fields:
-      Array.isArray(
-        data && data.fields
-      )
-        ? data.fields
-        : [],
-
-    name:
-      data && data.name
-        ? data.name
-        : null,
-
-    raw: data
-  };
-}
-
-async function getGameKeyOffers(
-  gameId
-) {
-  const data =
-    await fazerGet(
-      "/gamekeys/keys?game_id=" +
-        encodeURIComponent(
-          gameId
-        )
-    );
-
-  return {
-    offers: getArray(
-      data,
-      [
-        "keys",
-        "items",
-        "offers"
-      ]
-    ),
-
-    name:
-      (data &&
-        data.GameName) ||
-      (data && data.name) ||
-      null,
-
-    platform:
-      (data &&
-        data.platform) ||
-      "",
-
-    region:
-      (data &&
-        data.region) ||
-      "",
-
-    regionRestriction:
-      Boolean(
-        data &&
-          data.region_restriction
-      ),
-
-    raw: data
-  };
-}
-
-/* ======================================================
-   PRODUCT BUILDER
-====================================================== */
-
-function makePricedProduct(
-  base,
-  priceUsd,
-  offer
-) {
-  const priceSdg =
-    calculateSalePrice(
-      priceUsd
-    );
-
-  return Object.assign(
-    {},
-    base,
-    {
-      price_usd:
-        frontendCompatibleUsd(
-          priceSdg
-        ),
-
-      source_price_usd:
-        priceUsd,
-
-      cost_sdg:
-        priceUsd
-          ? Math.round(
-              priceUsd *
-                USD_TO_SDG
-            )
-          : null,
-
-      markup_percent:
-        priceUsd
-          ? getMarkupForCost(
-              priceUsd *
-                USD_TO_SDG
-            ) * 100
-          : null,
-
-      price_sdg:
-        priceSdg,
-
-      pricing_mode:
-        "automatic",
-
-      stock:
-        offer &&
-        offer.stock != null
-          ? offer.stock
-          : null,
-
-      min_order_quantity:
-        offer &&
-        offer.min_order_quantity !=
-          null
-          ? offer.min_order_quantity
-          : 1,
-
-      max_order_quantity:
-        offer &&
-        offer.max_order_quantity !=
-          null
-          ? offer.max_order_quantity
-          : null,
-
-      offer:
-        offer || null
-    }
-  );
-}
-
-/* ======================================================
-   BUILD COMPLETE CATALOG
-====================================================== */
-
-async function buildPricedCatalog() {
-  console.log(
-    "[PRICE CACHE] Building complete priced catalog..."
-  );
-
-  const families =
-    await Promise.allSettled([
-      getAllCategories(
-        "topups"
-      ),
-
-      getAllCategories(
-        "giftcards"
-      ),
-
-      getAllCategories(
-        "gamekeys"
-      )
-    ]);
-
-  const topups =
-    families[0].status ===
-    "fulfilled"
-      ? families[0].value
-      : [];
-
-  const giftcards =
-    families[1].status ===
-    "fulfilled"
-      ? families[1].value
-      : [];
-
-  const gamekeys =
-    families[2].status ===
-    "fulfilled"
-      ? families[2].value
-      : [];
-
-  families.forEach(
-    (family, index) => {
-      if (
-        family.status ===
-        "rejected"
-      ) {
-        console.warn(
-          "[PRICE] Family " +
-            index +
-            " unavailable: " +
-            (
-              family.reason &&
-              family.reason.message
-            ) ||
-            family.reason
-        );
-      }
-    }
-  );
-
-  const products = [];
-
-  /* TOPUPS */
-
-  const topupResults =
-    await mapWithConcurrency(
-      topups,
-      async category => {
-        const categoryId =
-          String(
-            category.category_id ||
-              category.id ||
-              ""
-          );
-
-        const categoryName =
-          String(
-            category.name ||
-              category.title ||
-              categoryId
-          );
-
-        if (!categoryId) {
-          return [];
-        }
-
-        try {
-          const response =
-            await getTopupOffers(
-              categoryId
-            );
-
-          const fields =
-            response.fields.length >
-            0
-              ? response.fields
-              : Array.isArray(
-                  category.fields
-                )
-              ? category.fields
-              : [];
-
-          return response.offers.map(
-            (offer, index) => {
-              const label =
-                offerLabel(
-                  offer
-                );
-
-              const priceUsd =
-                offerPriceUsd(
-                  offer
-                );
-
-              const offerId =
-                String(
-                  offer.offer_id ||
-                    offer.id ||
-                    offer.offerId ||
-                    offer.sku ||
-                    offer.code ||
-                    index
-                );
-
-              return makePricedProduct(
-                {
-                  id:
-                    categoryId +
-                    "__offer__" +
-                    offerId,
-
-                  category_id:
-                    categoryId,
-
-                  offer_id:
-                    offerId,
-
-                  name:
-                    label === "عرض"
-                      ? categoryName
-                      : categoryName +
-                        " — " +
-                        label,
-
-                  base_name:
-                    categoryName,
-
-                  type:
-                    "topup",
-
-                  family:
-                    "topup",
-
-                  note:
-                    category.note ||
-                    "",
-
-                  fields
-                },
-
-                priceUsd,
-                offer
-              );
-            }
-          );
-        } catch (error) {
-          console.warn(
-            "[PRICE] Failed topup " +
-              categoryId +
-              ": " +
-              error.message
-          );
-
-          return [];
-        }
-      },
-      6
-    );
-
-  topupResults.forEach(
-    result => {
-      if (Array.isArray(result)) {
-        products.push(
-          ...result
-        );
-      }
-    }
-  );
-
-  /* GIFT CARDS */
-
-  const giftcardResults =
-    await mapWithConcurrency(
-      giftcards,
-      async category => {
-        const categoryId =
-          String(
-            category.category_id ||
-              category.id ||
-              ""
-          );
-
-        const categoryName =
-          String(
-            category.name ||
-              category.title ||
-              categoryId
-          );
-
-        if (!categoryId) {
-          return [];
-        }
-
-        try {
-          const response =
-            await getGiftcardOffers(
-              categoryId
-            );
-
-          const fields =
-            response.fields.length >
-            0
-              ? response.fields
-              : Array.isArray(
-                  category.fields
-                )
-              ? category.fields
-              : [];
-
-          return response.offers.map(
-            (offer, index) => {
-              const label =
-                offerLabel(
-                  offer
-                );
-
-              const priceUsd =
-                offerPriceUsd(
-                  offer
-                );
-
-              const cardId =
-                String(
-                  offer.card_id ||
-                    offer.id ||
-                    offer.cardId ||
-                    offer.sku ||
-                    offer.code ||
-                    index
-                );
-
-              return makePricedProduct(
-                {
-                  id:
-                    categoryId +
-                    "__card__" +
-                    cardId,
-
-                  category_id:
-                    categoryId,
-
-                  card_id:
-                    cardId,
-
-                  name:
-                    label === "عرض"
-                      ? categoryName
-                      : categoryName +
-                        " — " +
-                        label,
-
-                  base_name:
-                    categoryName,
-
-                  type:
-                    "gift_card",
-
-                  family:
-                    "giftcard",
-
-                  note:
-                    category.note ||
-                    "",
-
-                  fields
-                },
-
-                priceUsd,
-                offer
-              );
-            }
-          );
-        } catch (error) {
-          console.warn(
-            "[PRICE] Failed gift card " +
-              categoryId +
-              ": " +
-              error.message
-          );
-
-          return [];
-        }
-      },
-      6
-    );
-
-  giftcardResults.forEach(
-    result => {
-      if (Array.isArray(result)) {
-        products.push(
-          ...result
-        );
-      }
-    }
-  );
-
-  /* GAME KEYS */
-
-  const gameKeyResults =
-    await mapWithConcurrency(
-      gamekeys,
-      async game => {
-        const gameId =
-          String(
-            game.game_id ||
-              game.category_id ||
-              game.id ||
-              ""
-          );
-
-        const gameName =
-          String(
-            game.GameName ||
-              game.name ||
-              game.title ||
-              gameId
-          );
-
-        if (!gameId) {
-          return [];
-        }
-
-        try {
-          const response =
-            await getGameKeyOffers(
-              gameId
-            );
-
-          return response.offers.map(
-            (key, index) => {
-              const priceUsd =
-                offerPriceUsd(
-                  key
-                );
-
-              const label =
-                offerLabel(
-                  key
-                );
-
-              const keyId =
-                String(
-                  key.key_id ||
-                    key.id ||
-                    key.keyId ||
-                    key.sku ||
-                    key.code ||
-                    index
-                );
-
-              return makePricedProduct(
-                {
-                  id:
-                    gameId +
-                    "__key__" +
-                    keyId,
-
-                  category_id:
-                    gameId,
-
-                  game_id:
-                    gameId,
-
-                  key_id:
-                    keyId,
-
-                  name:
-                    label === "عرض"
-                      ? gameName
-                      : gameName +
-                        " — " +
-                        label,
-
-                  base_name:
-                    gameName,
-
-                  type:
-                    "game_key",
-
-                  family:
-                    "gamekey",
-
-                  platform:
-                    game.platform ||
-                    response.platform ||
-                    "",
-
-                  region:
-                    game.region ||
-                    response.region ||
-                    "",
-
-                  region_restriction:
-                    Boolean(
-                      game.region_restriction ||
-                        response.regionRestriction
-                    )
-                },
-
-                priceUsd,
-                key
-              );
-            }
-          );
-        } catch (error) {
-          console.warn(
-            "[PRICE] Failed game keys " +
-              gameId +
-              ": " +
-              error.message
-          );
-
-          return [];
-        }
-      },
-      6
-    );
-
-  gameKeyResults.forEach(
-    result => {
-      if (Array.isArray(result)) {
-        products.push(
-          ...result
-        );
-      }
-    }
-  );
-
-  const usablePrices =
-    products.filter(
-      product =>
-        Number.isFinite(
-          Number(
-            product.price_sdg
-          )
-        ) &&
-        Number(
-          product.price_sdg
-        ) > 0
-    ).length;
-
-  console.log(
-    "[PRICE CACHE] Built " +
-      products.length +
-      " catalog entries; " +
-      usablePrices +
-      " have prices"
-  );
-
-  pricedCatalogCache =
-    products;
-
-  pricedCatalogBuiltAt =
-    Date.now();
-
-  savePriceCacheToDisk(
-    products
-  );
-
-  return products;
-}
-
-async function getPricedCatalog() {
-  if (cacheIsFresh()) {
-    return pricedCatalogCache;
-  }
-
-  if (priceRefreshPromise) {
-    return priceRefreshPromise;
-  }
-
-  priceRefreshPromise =
-    buildPricedCatalog()
-      .catch(error => {
-        console.error(
-          "[PRICE CACHE] Build failed:",
-          error.message
-        );
-
-        if (
-          Array.isArray(
-            pricedCatalogCache
-          ) &&
-          pricedCatalogCache.length >
-            0
-        ) {
-          return pricedCatalogCache;
-        }
-
-        throw error;
-      })
-      .finally(() => {
-        priceRefreshPromise =
-          null;
-      });
-
-  return priceRefreshPromise;
-}
-
-loadPriceCacheFromDisk();
-
-/* ======================================================
-   HEALTH
-====================================================== */
-
-app.get(
-  "/health",
-  (req, res) => {
-    res.json({
-      ok: true,
-      service:
-        "ABESHA STORE",
-      status:
-        "running",
-
-      pricing: {
-        usdToSdg:
-          USD_TO_SDG,
-
-        cacheFresh:
-          cacheIsFresh(),
-
-        cachedProducts:
-          pricedCatalogCache
-            ? pricedCatalogCache.length
-            : 0
-      }
-    });
-  }
-);
-
-/* ======================================================
-   FAZER ROUTES
-====================================================== */
-
-app.get(
-  "/api/fazer/me",
-  async (req, res) => {
-    try {
-      res.json(
-        await fazerGet("/me")
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-async function sendFamilyCatalog(
-  res
-) {
-  const results =
-    await Promise.allSettled([
-      getAllCategories(
-        "topups"
-      ),
-
-      getAllCategories(
-        "giftcards"
-      ),
-
-      getAllCategories(
-        "gamekeys"
-      )
-    ]);
-
-  const topups =
-    results[0].status ===
-    "fulfilled"
-      ? results[0].value
-      : [];
-
-  const giftcards =
-    results[1].status ===
-    "fulfilled"
-      ? results[1].value
-      : [];
-
-  const gamekeys =
-    results[2].status ===
-    "fulfilled"
-      ? results[2].value
-      : [];
-
-  res.json({
-    ok: true,
-
-    families: {
-      topups: {
-        ok:
-          results[0].status ===
-          "fulfilled",
-
-        items: topups
-      },
-
-      giftcards: {
-        ok:
-          results[1].status ===
-          "fulfilled",
-
-        items: giftcards
-      },
-
-      gamekeys: {
-        ok:
-          results[2].status ===
-          "fulfilled",
-
-        items: gamekeys
-      }
-    },
-
-    total:
-      topups.length +
-      giftcards.length +
-      gamekeys.length
-  });
-}
-
-app.get(
-  "/api/fazer/catalog",
-  async (req, res) => {
-    try {
-      await sendFamilyCatalog(
-        res
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/topups",
-  async (req, res) => {
-    try {
-      const items =
-        await getAllCategories(
-          "topups"
-        );
-
-      res.json({
-        ok: true,
-        kind: "topup",
-        items,
-
-        meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
-        }
-      });
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/topups/offers",
-  async (req, res) => {
-    try {
-      const categoryId =
-        req.query.category_id;
-
-      if (!categoryId) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "category_id is required"
-          });
-      }
-
-      res.json(
-        await fazerGet(
-          "/topups/offers?category_id=" +
-            encodeURIComponent(
-              categoryId
-            )
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/giftcards",
-  async (req, res) => {
-    try {
-      const items =
-        await getAllCategories(
-          "giftcards"
-        );
-
-      res.json({
-        ok: true,
-        kind:
-          "gift_card",
-        items,
-
-        meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
-        }
-      });
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/giftcards/cards",
-  async (req, res) => {
-    try {
-      const categoryId =
-        req.query.category_id;
-
-      if (!categoryId) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "category_id is required"
-          });
-      }
-
-      res.json(
-        await fazerGet(
-          "/giftcards/cards?category_id=" +
-            encodeURIComponent(
-              categoryId
-            )
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/gamekeys",
-  async (req, res) => {
-    try {
-      const items =
-        await getAllCategories(
-          "gamekeys"
-        );
-
-      res.json({
-        ok: true,
-        kind:
-          "game_key",
-        items,
-
-        meta: {
-          total:
-            items.length,
-
-          limit:
-            items.length,
-
-          next_cursor:
-            null,
-
-          has_more:
-            false
-        }
-      });
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/gamekeys/keys",
-  async (req, res) => {
-    try {
-      const gameId =
-        req.query.game_id;
-
-      if (!gameId) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "game_id is required"
-          });
-      }
-
-      res.json(
-        await fazerGet(
-          "/gamekeys/keys?game_id=" +
-            encodeURIComponent(
-              gameId
-            )
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-/* ======================================================
-   PUBLIC PRODUCTS
-====================================================== */
-
-app.get(
-  "/api/products",
-  async (req, res) => {
-    try {
-      const products =
-        await getPricedCatalog();
-
-      const visibleProducts =
-        getPublicProducts(
-          products
-        );
-
-      res.json({
-        ok: true,
-
-        total:
-          visibleProducts.length,
-
-        products:
-          visibleProducts,
-
-        pricing: {
-          currency:
-            "SDG",
-
-          usdToSdg:
-            USD_TO_SDG,
-
-          catalogMode:
-            storeSettings.catalogMode,
-
-          tiers:
-            PRICING_TIERS.map(
-              tier => ({
-                maxCost:
-                  Number.isFinite(
-                    tier.maxCost
-                  )
-                    ? tier.maxCost
-                    : null,
-
-                markupPercent:
-                  tier.markup *
-                  100
-              })
-            ),
-
-          roundRules: {
-            under10000:
-              100,
-
-            from10000To100000:
-              500,
-
-            from100000To500000:
-              1000,
-
-            from500000:
-              5000
-          }
-        }
-      });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* ======================================================
-   PRICE REFRESH
-====================================================== */
-
-app.post(
-  "/api/prices/refresh",
-  async (req, res) => {
-    try {
-      if (
-        !process.env.ADMIN_KEY ||
-        req.headers[
-          "x-admin-key"
-        ] !==
-          process.env.ADMIN_KEY
-      ) {
-        return res
-          .status(401)
-          .json({
-            ok: false,
-            error:
-              "Unauthorized"
-          });
-      }
-
-      pricedCatalogCache =
-        null;
-
-      pricedCatalogBuiltAt =
-        0;
-
-      const products =
-        await getPricedCatalog();
-
-      res.json({
-        ok: true,
-
-        total:
-          products.length,
-
-        refreshedAt:
-          new Date().toISOString()
-      });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* ======================================================
-   TOPUP VALIDATION
-====================================================== */
-
-app.post(
-  "/api/fazer/topups/validate-id",
-  async (req, res) => {
-    try {
-      const body = {
-        category_id:
-          req.body &&
-          req.body.category_id,
-
-        fields:
-          req.body &&
-          req.body.fields
-      };
-
-      res.json(
-        await fazerFetch(
-          "/topups/validate-id",
-          {
-            method:
-              "POST",
-
-            headers: {
-              "Content-Type":
-                "application/json"
-            },
-
-            body:
-              JSON.stringify(
-                body
-              )
-          }
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-/* ======================================================
-   STEAM
-====================================================== */
-
-app.get(
-  "/api/fazer/steam-topup/rates",
-  async (req, res) => {
-    try {
-      res.json(
-        await fazerGet(
-          "/steam-topup/rates"
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/fazer/steam-gifts/games",
-  async (req, res) => {
-    try {
-      const limit =
-        req.query.limit ||
-        "100";
-
-      res.json(
-        await fazerGet(
-          "/steam-gifts/games?limit=" +
-            encodeURIComponent(
-              limit
-            )
-        )
-      );
-    } catch (error) {
-      res.status(
-        error.status || 500
-      ).json({
-        ok: false,
-        error:
-          error.message,
-        details:
-          error.data || null
-      });
-    }
-  }
-);
-
-/* ======================================================
-   BASIC CATALOG
-====================================================== */
-
-app.get(
-  "/api/catalog",
-  async (req, res) => {
-    try {
-      const results =
-        await Promise.allSettled([
-          getAllCategories(
-            "topups"
-          ),
-
-          getAllCategories(
-            "giftcards"
-          ),
-
-          getAllCategories(
-            "gamekeys"
-          )
-        ]);
-
-      const topups =
-        results[0].status ===
-        "fulfilled"
-          ? results[0].value
-          : [];
-
-      const giftcards =
-        results[1].status ===
-        "fulfilled"
-          ? results[1].value
-          : [];
-
-      const gamekeys =
-        results[2].status ===
-        "fulfilled"
-          ? results[2].value
-          : [];
-
-      const products = [];
-
-      topups.forEach(item => {
-        products.push({
-          id:
-            item.category_id ||
-            item.id,
-
-          name:
-            item.name ||
-            item.title,
-
-          type:
-            "topup",
-
-          family:
-            "topup",
-
-          note:
-            item.note || "",
-
-          fields:
-            item.fields || []
-        });
-      });
-
-      giftcards.forEach(item => {
-        products.push({
-          id:
-            item.category_id ||
-            item.id,
-
-          name:
-            item.name ||
-            item.title,
-
-          type:
-            "gift_card",
-
-          family:
-            "giftcard",
-
-          note:
-            item.note || "",
-
-          fields:
-            item.fields || []
-        });
-      });
-
-      gamekeys.forEach(item => {
-        products.push({
-          id:
-            item.game_id ||
-            item.category_id ||
-            item.id,
-
-          name:
-            item.name ||
-            item.GameName ||
-            item.title,
-
-          type:
-            "game_key",
-
-          family:
-            "gamekey",
-
-          platform:
-            item.platform || "",
-
-          region:
-            item.region || "",
-
-          region_restriction:
-            Boolean(
-              item.region_restriction
-            )
-        });
-      });
-
-      res.json({
-        ok: true,
-
-        total:
-          products.length,
-
-        products
-      });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* ======================================================
-   ADMIN AUTH
-====================================================== */
-
-function requireAdmin(
-  req,
-  res,
-  next
-) {
-  if (!process.env.ADMIN_KEY) {
-    return res
-      .status(500)
-      .json({
-        ok: false,
-        error:
-          "ADMIN_KEY is not configured"
-      });
-  }
-
-  if (
-    !req.headers[
-      "x-admin-key"
-    ] ||
-    req.headers[
-      "x-admin-key"
-    ] !==
-      process.env.ADMIN_KEY
-  ) {
-    return res
-      .status(401)
-      .json({
-        ok: false,
-        error:
-          "Unauthorized"
-      });
-  }
-
-  next();
-}
-
-app.get(
-  "/api/admin/status",
-  (req, res) => {
-    res.json({
-      ok: true,
-      adminKeyConfigured:
-        Boolean(
-          process.env.ADMIN_KEY
-        )
-    });
-  }
-);
-
-app.get(
-  "/api/admin/catalog",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const data =
-        await getPricedCatalog();
-
-      res.json({
-        ok: true,
-
-        total:
-          data.length,
-
-        products:
-          data.map(
-            getAdminProduct
-          ),
-
-        settings:
-          storeSettings,
-
-        pricing: {
-          usdToSdg:
-            USD_TO_SDG,
-
-          tiers:
-            PRICING_TIERS
-        }
-      });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/admin/settings",
-  requireAdmin,
-  (req, res) => {
-    res.json({
-      ok: true,
-
-      settings:
-        storeSettings,
-
-      pricing: {
-        usdToSdg:
-          USD_TO_SDG,
-
-        tiers:
-          PRICING_TIERS
-      }
-    });
-  }
-);
-
-app.post(
-  "/api/admin/catalog/mode",
-  requireAdmin,
-  (req, res) => {
-    const mode =
-      String(
-        (req.body &&
-          req.body.mode) ||
-          ""
-      ).trim();
-
-    if (
-      ![
-        "all",
-        "curated"
-      ].includes(mode)
-    ) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "mode must be all or curated"
-        });
-    }
-
-    storeSettings.catalogMode =
-      mode;
-
-    saveStoreSettings();
-
-    res.json({
-      ok: true,
-      catalogMode:
-        mode
-    });
-  }
-);
-
-app.post(
-  "/api/admin/catalog/publish",
-  requireAdmin,
-  (req, res) => {
-    const productId =
-      String(
-        (req.body &&
-          req.body.productId) ||
-          ""
-      ).trim();
-
-    if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
-    }
-
-    storeSettings.hiddenIds =
-      storeSettings.hiddenIds.filter(
-        id => id !== productId
-      );
-
-    if (
-      !storeSettings.publishedIds.includes(
-        productId
-      )
-    ) {
-      storeSettings.publishedIds.push(
-        productId
-      );
-    }
-
-    saveStoreSettings();
-
-    res.json({
-      ok: true,
-      productId,
-      published:
-        true
-    });
-  }
-);
-
-app.post(
-  "/api/admin/catalog/unpublish",
-  requireAdmin,
-  (req, res) => {
-    const productId =
-      String(
-        (req.body &&
-          req.body.productId) ||
-          ""
-      ).trim();
-
-    if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
-    }
-
-    storeSettings.publishedIds =
-      storeSettings.publishedIds.filter(
-        id => id !== productId
-      );
-
-    if (
-      !storeSettings.hiddenIds.includes(
-        productId
-      )
-    ) {
-      storeSettings.hiddenIds.push(
-        productId
-      );
-    }
-
-    saveStoreSettings();
-
-    res.json({
-      ok: true,
-      productId,
-      published:
-        false
-    });
-  }
-);
-
-app.post(
-  "/api/admin/catalog/discount",
-  requireAdmin,
-  (req, res) => {
-    const productId =
-      String(
-        (req.body &&
-          req.body.productId) ||
-          ""
-      ).trim();
-
-    const discount =
-      normalizeDiscount(
-        req.body &&
-          req.body.discount
-      );
-
-    if (!productId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "productId is required"
-        });
-    }
-
-    if (!discount) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "Invalid discount"
-        });
-    }
-
-    storeSettings.discounts[
-      productId
-    ] = discount;
-
-    saveStoreSettings();
-
-    res.json({
-      ok: true,
-      productId,
-      discount
-    });
-  }
-);
-
-app.delete(
-  "/api/admin/catalog/discount/:productId",
-  requireAdmin,
-  (req, res) => {
-    const productId =
-      String(
-        req.params.productId ||
-          ""
-      ).trim();
-
-    delete storeSettings.discounts[
-      productId
-    ];
-
-    saveStoreSettings();
-
-    res.json({
-      ok: true,
-      productId,
-      discount:
-        null
-    });
-  }
-);
-
-/* ======================================================
-   ADMIN PAGE
-====================================================== */
-
-const ADMIN_HTML = `
-<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ABESHA STORE — الإدارة</title>
-<style>
-*{box-sizing:border-box}
-body{
- margin:0;
- font-family:Arial,sans-serif;
- background:#071426;
- color:#eef5ff
-}
-header{
- padding:18px 16px;
- background:#0b1f3a;
- border-bottom:1px solid #1d416e;
- position:sticky;
- top:0;
- z-index:5
-}
-h1{margin:0 0 6px;font-size:22px}
-.muted{color:#9fb3cc;font-size:13px}
-.wrap{max-width:1200px;margin:auto;padding:16px}
-.panel{
- background:#0b1f3a;
- border:1px solid #1d416e;
- border-radius:14px;
- padding:14px;
- margin-bottom:14px
-}
-.row{
- display:flex;
- gap:10px;
- flex-wrap:wrap;
- align-items:center
-}
-input,select,button{
- font:inherit;
- border-radius:9px;
- border:1px solid #31577f;
- padding:10px
-}
-input,select{
- background:#071426;
- color:#fff;
- min-width:180px
-}
-button{
- background:#123866;
- color:#fff;
- cursor:pointer
-}
-button.primary{background:#1769aa}
-button.danger{background:#7d2633}
-.stats{
- display:grid;
- grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
- gap:10px
-}
-.stat{
- background:#071426;
- border-radius:10px;
- padding:12px
-}
-.num{
- font-size:22px;
- font-weight:bold;
- margin-top:5px
-}
-#products{
- display:grid;
- grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
- gap:12px
-}
-.card{
- background:#0b1f3a;
- border:1px solid #1d416e;
- border-radius:12px;
- padding:13px
-}
-.card h3{
- font-size:15px;
- margin:0 0 8px;
- line-height:1.4
-}
-.price{
- font-size:19px;
- font-weight:bold
-}
-.badge{
- display:inline-block;
- padding:4px 7px;
- border-radius:7px;
- background:#123866;
- color:#cfe6ff;
- font-size:11px;
- margin:2px
-}
-.actions{
- display:flex;
- gap:7px;
- flex-wrap:wrap;
- margin-top:10px
-}
-.small{
- font-size:12px;
- color:#a9bdd3
-}
-.discount{
- color:#ffd36b;
- margin-top:6px
-}
-</style>
-</head>
-
-<body>
-
-<header>
-<div class="wrap" style="padding:0">
-<h1>ABESHA STORE — لوحة الإدارة</h1>
-<div class="muted">
-إدارة المنتجات والنشر والأسعار والعروض
-</div>
-</div>
-</header>
-
-<main class="wrap">
-
-<section class="panel">
-<div class="row">
-<input
- id="key"
- type="password"
- placeholder="ADMIN_KEY">
-<button
- class="primary"
- onclick="loadAll()">
-دخول وتحميل الكتالوج
-</button>
-
-<select id="mode" onchange="changeMode()">
-<option value="all">
-عرض كل المنتجات الحالية
-</option>
-<option value="curated">
-عرض المنتجات التي أختارها فقط
-</option>
-</select>
-</div>
-
-<div
- id="msg"
- class="muted"
- style="margin-top:9px">
-</div>
-</section>
-
-<section class="panel">
-<div class="stats">
-
-<div class="stat">
-إجمالي الكتالوج
-<div class="num" id="total">—</div>
-</div>
-
-<div class="stat">
-المنشور
-<div class="num" id="published">—</div>
-</div>
-
-<div class="stat">
-المخفي
-<div class="num" id="hidden">—</div>
-</div>
-
-<div class="stat">
-عروض نشطة
-<div class="num" id="discounts">—</div>
-</div>
-
-</div>
-</section>
-
-<section class="panel">
-<div class="row">
-<input
- id="search"
- placeholder="ابحث باسم المنتج..."
- oninput="render()">
-
-<select id="type" onchange="render()">
-<option value="">كل الأقسام</option>
-<option value="topup">Topups</option>
-<option value="gift_card">Gift Cards</option>
-<option value="game_key">Game Keys</option>
-</select>
-</div>
-</section>
-
-<section id="products"></section>
-
-</main>
-
-<script>
-let key="";
-let data=[];
-let settings={};
-
-function esc(s){
- return String(s==null?"":s)
-  .replace(/[&<>"]/g,function(m){
-   return {
-    "&":"&amp;",
-    "<":"&lt;",
-    ">":"&gt;",
-    '"':"&quot;"
-   }[m];
-  });
-}
-
-function headers(){
- return {
-  "Content-Type":"application/json",
-  "x-admin-key":key
- };
-}
-
-function msg(t){
- document.getElementById("msg").textContent=t||"";
-}
-
-async function api(url,opts){
- opts=opts||{};
-
- const response=await fetch(
-  url,
-  Object.assign(
-   {},
-   opts,
-   {
-    headers:Object.assign(
-     {},
-     headers(),
-     opts.headers||{}
-    )
-   }
-  )
- );
-
- const json=await response
-  .json()
-  .catch(function(){
-   return {};
-  });
-
- if(!response.ok){
-  throw new Error(
-   json.error||"حدث خطأ"
-  );
- }
-
- return json;
-}
-
-async function loadAll(){
- key=document
-  .getElementById("key")
-  .value
-  .trim();
-
- if(!key){
-  msg("أدخل مفتاح الإدارة.");
-  return;
- }
-
- try{
-  const json=
-   await api(
-    "/api/admin/catalog"
-   );
-
-  data=json.products||[];
-  settings=json.settings||{};
-
-  document
-   .getElementById("mode")
-   .value=
-   settings.catalogMode||"all";
-
-  updateStats();
-  render();
-
-  msg("تم تحميل الكتالوج.");
- }catch(error){
-  msg(error.message);
- }
-}
-
-function updateStats(){
- document.getElementById("total")
-  .textContent=data.length;
-
- document.getElementById("published")
-  .textContent=
-   data.filter(
-    p=>p.published
-   ).length;
-
- document.getElementById("hidden")
-  .textContent=
-   data.filter(
-    p=>!p.published
-   ).length;
-
- document.getElementById("discounts")
-  .textContent=
-   data.filter(
-    p=>p.discount &&
-       p.discount.active!==false
-   ).length;
-}
-
-function render(){
- const query=
-  document
-   .getElementById("search")
-   .value
-   .trim()
-   .toLowerCase();
-
- const type=
-  document
-   .getElementById("type")
-   .value;
-
- const list=data.filter(
-  function(product){
-   const name=
-    String(
-     product.name||""
-    ).toLowerCase();
-
-   return (
-    (!query ||
-     name.includes(query)) &&
-    (!type ||
-     product.type===type)
-   );
-  }
- );
-
- const box=
-  document.getElementById(
-   "products"
-  );
-
- box.innerHTML="";
-
- list.slice(0,500)
- .forEach(function(product){
-
-  const discount=
-   product.discount;
-
-  const price=
-   Number(
-    product.price_sdg||0
-   );
-
-  const state=
-   product.published
-    ? "منشور"
-    : "مخفي";
-
-  let html=
-   '<article class="card">';
-
-  html+=
-   '<h3>'+
-   esc(product.name)+
-   '</h3>';
-
-  html+=
-   '<div class="small">'+
-   esc(product.type)+
-   " · "+
-   esc(product.id)+
-   '</div>';
-
-  html+=
-   '<div class="price">'+
-   price.toLocaleString("en-US")+
-   ' SDG</div>';
-
-  if(discount){
-   html+=
-    '<div class="discount">'+
-    "عرض: "+
-    esc(
-     discount.label||
-     "عرض خاص"
-    )+
-    " — ";
-
-   if(
-    discount.type===
-    "percent"
-   ){
-    html+=
-     esc(
-      discount.value
-     )+"%";
-   }else{
-    html+=
-     Number(
-      discount.value||0
-     ).toLocaleString(
-      "en-US"
-     )+" SDG";
-   }
-
-   html+="</div>";
-  }
-
-  html+=
-   '<div>'+
-   '<span class="badge">'+
-   state+
-   '</span>';
-
-  if(
-   product.stock!==undefined &&
-   product.stock!==null
-  ){
-   html+=
-    '<span class="badge">'+
-    "Stock: "+
-    esc(product.stock)+
-    "</span>";
-  }
-
-  html+="</div>";
-
-  html+=
-   '<div class="actions">';
-
-  html+=
-   '<button class="primary" '+
-   'onclick=\'togglePublish('+
-   JSON.stringify(product.id)+
-   ","+
-   String(!product.published)+
-   ")\'>"+
-   (
-    product.published
-     ? "إخفاء"
-     : "نشر"
-   )+
-   "</button>";
-
-  html+=
-   '<button onclick=\'setDiscount('+
-   JSON.stringify(product.id)+
-   ")\'>عرض/خصم</button>";
-
-  if(discount){
-   html+=
-    '<button class="danger" '+
-    'onclick=\'removeDiscount('+
-    JSON.stringify(product.id)+
-    ")\'>"+
-    "إزالة العرض"+
-    "</button>";
-  }
-
-  html+=
-   "</div></article>";
-
-  box.insertAdjacentHTML(
-   "beforeend",
-   html
-  );
- });
-}
-
-async function togglePublish(
- id,
- publish
-){
- try{
-  await api(
-   publish
-    ? "/api/admin/catalog/publish"
-    : "/api/admin/catalog/unpublish",
-   {
-    method:"POST",
-    body:JSON.stringify({
-     productId:id
-    })
-   }
-  );
-
-  const product=
-   data.find(
-    item=>item.id===id
-   );
-
-  if(product){
-   product.published=
-    publish;
-  }
-
-  updateStats();
-  render();
-
-  msg(
-   publish
-    ? "تم نشر المنتج."
-    : "تم إخفاء المنتج."
-  );
- }catch(error){
-  msg(error.message);
- }
-}
-
-async function setDiscount(id){
- const type=
-  prompt(
-   "نوع الخصم: percent للنسبة أو fixed لمبلغ SDG",
-   "percent"
-  );
-
- if(type===null)return;
-
- const normalizedType=
-  type.trim();
-
- if(
-  ["percent","fixed"]
-   .indexOf(
-    normalizedType
-   )===-1
- ){
-  msg("نوع الخصم غير صحيح.");
-  return;
- }
-
- const value=
-  prompt(
-   normalizedType==="percent"
-    ? "نسبة الخصم"
-    : "قيمة الخصم بالجنيه السوداني",
-   "10"
-  );
-
- if(value===null)return;
-
- const number=
-  Number(value);
-
- if(
-  !Number.isFinite(number) ||
-  number<=0
- ){
-  msg("قيمة الخصم غير صحيحة.");
-  return;
- }
-
- const label=
-  prompt(
-   "اسم العرض",
-   "عرض خاص"
-  );
-
- if(label===null)return;
-
- try{
-  const json=
-   await api(
-    "/api/admin/catalog/discount",
-    {
-     method:"POST",
-     body:JSON.stringify({
-      productId:id,
-      discount:{
-       type:
-        normalizedType,
-       value:number,
-       label:label,
-       active:true
-      }
-     })
-    }
-   );
-
-  const product=
-   data.find(
-    item=>item.id===id
-   );
-
-  if(product){
-   product.discount=
-    json.discount;
-  }
-
-  updateStats();
-  render();
-
-  msg("تم حفظ العرض.");
- }catch(error){
-  msg(error.message);
- }
-}
-
-async function removeDiscount(id){
- try{
-  await api(
-   "/api/admin/catalog/discount/"+
-   encodeURIComponent(id),
-   {
-    method:"DELETE"
-   }
-  );
-
-  const product=
-   data.find(
-    item=>item.id===id
-   );
-
-  if(product){
-   product.discount=null;
-  }
-
-  updateStats();
-  render();
-
-  msg("تمت إزالة العرض.");
- }catch(error){
-  msg(error.message);
- }
-}
-
-async function changeMode(){
- if(!key){
-  msg("أدخل ADMIN_KEY أولاً.");
-  return;
- }
-
- try{
-  const mode=
-   document
-    .getElementById("mode")
-    .value;
-
-  await api(
-   "/api/admin/catalog/mode",
-   {
-    method:"POST",
-    body:JSON.stringify({
-     mode:mode
-    })
-   }
-  );
-
-  settings.catalogMode=
-   mode;
-
-  msg(
-   "تم تغيير طريقة عرض الكتالوج."
-  );
- }catch(error){
-  msg(error.message);
- }
-}
-</script>
-
-</body>
-</html>
-`;
-
-app.get(
-  "/admin",
-  (req, res) => {
-    res
-      .type("html")
-      .send(
-        ADMIN_HTML
-      );
-  }
-);
-
-/* ======================================================
-   ORDERS
-====================================================== */
-
-const ORDERS =
-  new Map();
-
-function loadOrdersFromDisk() {
-  const parsed =
-    jsonFileRead(
-      ORDERS_FILE,
-      []
-    );
-
-  if (
-    !Array.isArray(parsed)
-  ) {
-    return;
-  }
-
-  parsed.forEach(
-    order => {
-      if (
-        order &&
-        order.orderNumber
-      ) {
-        ORDERS.set(
-          order.orderNumber,
-          order
-        );
-      }
-    }
-  );
-
-  console.log(
-    "[ORDERS] Loaded " +
-      ORDERS.size +
-      " orders from disk"
-  );
-}
-
-function saveOrdersToDisk() {
-  jsonFileWrite(
-    ORDERS_FILE,
-    Array.from(
-      ORDERS.values()
-    )
-  );
-}
-
-function customerKey(
-  customer
-) {
-  const value =
-    String(
-      (
-        customer &&
-        (
-          customer.phone ||
-          customer.email
-        )
-      ) ||
-        ""
-    )
-      .trim()
-      .toLowerCase();
-
-  if (!value) {
-    return null;
-  }
-
-  return crypto
-    .createHash(
-      "sha256"
-    )
-    .update(value)
-    .digest("hex")
-    .slice(0, 24);
-}
-
-function generateOrderNumber() {
-  const part1 =
-    Math.floor(
-      100000 +
-        Math.random() *
-          900000
-    );
-
-  const part2 =
-    Math.floor(
-      100000 +
-        Math.random() *
-          900000
-    );
-
-  return (
-    "AB-" +
-    part1 +
-    "-" +
-    part2
-  );
-}
-
-loadOrdersFromDisk();
-
-app.post(
-  "/api/orders",
-  (req, res) => {
-    try {
-      const body =
-        req.body || {};
-
-      const customer =
-        body.customer;
-
-      const items =
-        body.items;
-
-      const paymentMethod =
-        body.paymentMethod;
-
-      const amount =
-        Number(body.total);
-
-      if (
-        !customer ||
-        typeof customer !==
-          "object"
-      ) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "customer is required"
-          });
-      }
-
-      if (
-        !Array.isArray(items) ||
-        items.length === 0
-      ) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "items are required"
-          });
-      }
-
-      if (!paymentMethod) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "paymentMethod is required"
-          });
-      }
-
-      if (
-        !Number.isFinite(
-          amount
-        ) ||
-        amount <= 0
-      ) {
-        return res
-          .status(400)
-          .json({
-            ok: false,
-            error:
-              "Invalid total"
-          });
-      }
-
-      const orderNumber =
-        generateOrderNumber();
-
-      const now =
-        new Date().toISOString();
-
-      const order = {
-        orderNumber,
-
-        customerKey:
-          customerKey(
-            customer
-          ),
-
-        customer: {
-          name:
-            String(
-              customer.name ||
-                ""
-            ).trim(),
-
-          phone:
-            String(
-              customer.phone ||
-                ""
-            ).trim(),
-
-          email:
-            String(
-              customer.email ||
-                ""
-            ).trim()
-        },
-
-        items:
-          items.map(item => ({
-            productId:
-              String(
-                item.productId ||
-                  ""
-              ),
-
-            name:
-              String(
-                item.name ||
-                  ""
-              ),
-
-            quantity:
-              Number(
-                item.quantity
-              ) || 1,
-
-            price:
-              Number(
-                item.price
-              ) || 0,
-
-            fields:
-              item.fields || {}
-          })),
-
-        payment: {
-          method:
-            String(
-              paymentMethod
-            ),
-
-          status:
-            "PENDING",
-
-          transactionId:
-            null
-        },
-
-        total:
-          amount,
-
-        status:
-          "PAYMENT_PENDING",
-
-        createdAt:
-          now,
-
-        updatedAt:
-          now
-      };
-
-      ORDERS.set(
-        orderNumber,
-        order
-      );
-
-      saveOrdersToDisk();
-
-      console.log(
-        "[ORDER CREATED] " +
-          orderNumber +
-          " - " +
-          amount +
-          " SDG - " +
-          paymentMethod
-      );
-
-      res.status(201).json({
-        ok: true,
-
-        order: {
-          orderNumber:
-            order.orderNumber,
-
-          status:
-            order.status,
-
-          total:
-            order.total,
-
-          paymentMethod:
-            order.payment.method,
-
-          createdAt:
-            order.createdAt
-        }
-      });
-    } catch (error) {
-      console.error(
-        "Create order error:",
-        error
-      );
-
-      res.status(500).json({
-        ok: false,
-        error:
-          "Failed to create order"
-      });
-    }
-  }
-);
-
-app.get(
-  "/api/orders/:orderNumber",
-  (req, res) => {
-    const order =
-      ORDERS.get(
-        req.params.orderNumber
-      );
-
-    if (!order) {
-      return res
-        .status(404)
-        .json({
-          ok: false,
-          error:
-            "Order not found"
-        });
-    }
-
-    res.json({
-      ok: true,
-      order
-    });
-  }
-);
-
-app.get(
-  "/api/customer/orders",
-  (req, res) => {
-    const phone =
-      String(
-        req.query.phone ||
-          ""
-      ).trim();
-
-    const email =
-      String(
-        req.query.email ||
-          ""
-      ).trim();
-
-    const key =
-      customerKey({
-        phone,
-        email
-      });
-
-    if (!key) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "phone or email is required"
-        });
-    }
-
-    const customerOrders =
-      Array.from(
-        ORDERS.values()
-      )
-        .filter(
-          order =>
-            order.customerKey ===
-            key
-        )
-        .sort(
-          (a, b) =>
-            new Date(
-              b.createdAt
-            ) -
-            new Date(
-              a.createdAt
-            )
-        )
-        .map(order => ({
-          orderNumber:
-            order.orderNumber,
-
-          total:
-            order.total,
-
-          status:
-            order.status,
-
-          paymentMethod:
-            order.payment
-              ? order.payment.method
-              : null,
-
-          createdAt:
-            order.createdAt,
-
-          items:
-            order.items
-        }));
-
-    res.json({
-      ok: true,
-
-      total:
-        customerOrders.length,
-
-      orders:
-        customerOrders
-    });
-  }
-);
-
-app.post(
-  "/api/customer/reorder",
-  async (req, res) => {
-    try {
-      const orderNumber =
-        String(
-          (
-            req.body &&
-            req.body.orderNumber
-          ) || ""
-        ).trim();
-
-      const order =
-        ORDERS.get(
-          orderNumber
-        );
-
-      if (!order) {
-        return res
-          .status(404)
-          .json({
-            ok: false,
-            error:
-              "Order not found"
-          });
-      }
-
-      const catalog =
-        await getPricedCatalog();
-
-      const byId =
-        new Map(
-          catalog.map(
-            product => [
-              String(
-                product.id
-              ),
-              product
-            ]
-          )
-        );
-
-      const items =
-        order.items
-          .map(
-            item =>
-              byId.get(
-                String(
-                  item.productId
-                )
-              )
-          )
-          .filter(
-            product =>
-              product &&
-              Number(
-                product.price_sdg
-              ) > 0
-          )
-          .map(
-            product => {
-              const publicProduct =
-                enrichProductForStore(
-                  product
-                );
-
-              return {
-                productId:
-                  publicProduct.id,
-
-                name:
-                  publicProduct.name,
-
-                price:
-                  publicProduct.price_sdg,
-
-                quantity:
-                  1,
-
-                fields:
-                  publicProduct.fields ||
-                  {}
-              };
-            }
-          );
-
-      res.json({
-        ok: true,
-
-        sourceOrderNumber:
-          orderNumber,
-
-        total:
-          items.reduce(
-            (sum, item) =>
-              sum +
-              Number(
-                item.price || 0
-              ),
-            0
-          ),
-
-        items
-      });
-    } catch (error) {
-      res.status(500).json({
-        ok: false,
-        error:
-          error.message
-      });
-    }
-  }
-);
-
-/* ======================================================
-   ADMIN ORDERS
-====================================================== */
-
-app.get(
-  "/api/admin/orders",
-  requireAdmin,
-  (req, res) => {
-    const list =
-      Array.from(
-        ORDERS.values()
-      ).sort(
-        (a, b) =>
-          new Date(
-            b.createdAt
-          ) -
-          new Date(
-            a.createdAt
-          )
-      );
-
-    res.json({
-      ok: true,
-      total:
-        list.length,
-      orders:
-        list
-    });
-  }
-);
-
-app.post(
-  "/api/admin/orders/:orderNumber/confirm-payment",
-  requireAdmin,
-  (req, res) => {
-    const order =
-      ORDERS.get(
-        req.params.orderNumber
-      );
-
-    if (!order) {
-      return res
-        .status(404)
-        .json({
-          ok: false,
-          error:
-            "Order not found"
-        });
-    }
-
-    if (
-      order.status !==
-      "PAYMENT_PENDING"
-    ) {
-      return res
-        .status(409)
-        .json({
-          ok: false,
-          error:
-            "Order cannot be confirmed from status " +
-            order.status
-        });
-    }
-
-    const transactionId =
-      String(
-        (
-          req.body &&
-          req.body.transactionId
-        ) || ""
-      ).trim();
-
-    if (!transactionId) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-          error:
-            "transactionId is required"
-        });
-    }
-
-    order.payment.transactionId =
-      transactionId;
-
-    order.payment.status =
-      "CONFIRMED";
-
-    order.status =
-      "PAYMENT_CONFIRMED";
-
-    order.updatedAt =
-      new Date().toISOString();
-
-    ORDERS.set(
-      order.orderNumber,
-      order
-    );
-
-    saveOrdersToDisk();
-
-    console.log(
-      "[PAYMENT CONFIRMED] " +
-        order.orderNumber +
-        " - " +
-        transactionId
-    );
-
-    res.json({
-      ok: true,
-      order
-    });
-  }
-);
-
-/* ======================================================
-   HOME
-====================================================== */
-
-app.get(
-  "/",
-  (req, res) => {
-    const indexFile =
-      path.join(
-        __dirname,
-        "public",
-        "index.html"
-      );
-
-    if (
-      fs.existsSync(indexFile)
-    ) {
-      return res.sendFile(
-        indexFile
-      );
-    }
-
-    res
-      .status(404)
-      .send(
-        "ABESHA STORE frontend not found"
-      );
-  }
-);
-
-/* ======================================================
-   START
-====================================================== */
-
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      "ABESHA STORE running on port " +
-        PORT
-    );
-
-    console.log(
-      "Pricing USD -> SDG: " +
-        USD_TO_SDG
-    );
-
-    console.log(
-      "Pricing tiers: 7% / 8% / 9% / 10%"
-    );
-
-    console.log(
-      "Fazer API: " +
-        FAZER_API
-    );
-  }
-);
+<!DOCTYPE html>  
+<html lang="ar" dir="rtl">  
+<head>  
+<meta charset="UTF-8">  
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">  
+<meta name="theme-color" content="#050d1d">  
+<title>ABESHA STORE</title>  
+<style>  
+:root{--bg:#050d1d;--panel:#091a33;--panel2:#0c2342;--line:#173a64;--text:#f5f8fc;--muted:#91a7c2;--blue:#0b63ce;--blue2:#084fa8;--white:#fff;--success:#48d39a;--danger:#ff6b78;--shadow:0 16px 45px rgba(0,0,0,.28)}  
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -10%,#10345d 0,#07152b 34%,var(--bg) 70%);color:var(--text);font-family:Arial,Tahoma,sans-serif}  
+button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}.wrap{width:min(1180px,100%);margin:auto;padding:0 16px}  
+.header{position:sticky;top:0;z-index:30;background:rgba(5,13,29,.92);backdrop-filter:blur(16px);border-bottom:1px solid rgba(23,58,100,.7)}  
+.header-inner{height:70px;display:flex;align-items:center;justify-content:space-between;gap:12px}.brand{font-weight:900;font-size:22px;letter-spacing:.4px}.brand span{color:#55a8ff}  
+.header-actions{display:flex;align-items:center;gap:8px}.icon-btn,.lang-btn{border:1px solid var(--line);background:#091b34;color:var(--text);border-radius:12px;padding:9px 12px}.cart-btn{position:relative}  
+.badge{position:absolute;top:-7px;left:-6px;background:#fff;color:#063b80;border-radius:999px;min-width:20px;height:20px;display:grid;place-items:center;font-size:11px;font-weight:900}  
+.hero{padding:42px 0 25px}.hero-card{background:linear-gradient(145deg,#0a2750,#07182f);border:1px solid #1b4776;border-radius:25px;padding:28px;box-shadow:var(--shadow);overflow:hidden;position:relative}  
+.hero-card:after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;background:rgba(19,104,210,.16);left:-90px;top:-100px}.hero h1{font-size:clamp(28px,6vw,48px);margin:0 0 10px;position:relative;z-index:1}  
+.hero p{color:#b5c9df;line-height:1.8;max-width:650px;margin:0 0 20px;position:relative;z-index:1}.search{width:100%;border:1px solid #234c79;background:#06152b;color:#fff;border-radius:15px;padding:15px 17px;outline:none}.search:focus{border-color:#3f94ef}  
+.toolbar{display:flex;gap:10px;align-items:center;overflow:auto;padding:6px 0 15px}.cat{white-space:nowrap;border:1px solid var(--line);background:#081a33;color:#dbe8f6;border-radius:999px;padding:10px 15px}.cat.active{background:#fff;color:#062f68;border-color:#fff;font-weight:800}  
+.section-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:14px 0}.section-head h2{font-size:22px;margin:0}.muted{color:var(--muted);font-size:13px}  
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}.card{background:linear-gradient(180deg,#0b203c,#091a32);border:1px solid var(--line);border-radius:18px;padding:15px;box-shadow:0 8px 25px rgba(0,0,0,.16)}  
+.product-icon{height:54px;width:54px;border-radius:15px;background:#092b54;border:1px solid #164b7f;display:grid;place-items:center;font-size:27px;margin-bottom:12px}.product-name{font-weight:900;line-height:1.45;min-height:44px}.product-type{font-size:12px;color:#8eabc8;margin-top:4px}.product-price{font-size:17px;font-weight:900;color:#62adff;margin-top:12px}  
+.buy{width:100%;border:0;background:linear-gradient(135deg,#0b63ce,#084fa8);color:#fff;border-radius:12px;padding:11px;margin-top:10px;font-weight:800}.buy:active{transform:scale(.98)}  
+.offer-list{display:grid;gap:8px;margin-top:12px}.offer-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;background:#07172c;border:1px solid #15395f;border-radius:12px;padding:9px}.offer-info strong{display:block}.offer-info small{color:#8da6c1}.offer-row .buy{width:auto;margin:0;padding:8px 11px;font-size:12px}  
+.empty{grid-column:1/-1;text-align:center;padding:35px 18px;color:#91a7c2;border:1px dashed #244c77;border-radius:16px}.notice{background:#071a31;border:1px solid #183e68;color:#a8bfd8;border-radius:14px;padding:12px;line-height:1.7;font-size:12px;margin:12px 0}  
+.drawer-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:40;display:none}.drawer-backdrop.open{display:block}.drawer{position:fixed;z-index:41;top:0;bottom:0;right:0;width:min(440px,94vw);background:#06152b;border-left:1px solid var(--line);transform:translateX(105%);transition:.25s;display:flex;flex-direction:column}.drawer.open{transform:translateX(0)}  
+.drawer-head{display:flex;justify-content:space-between;align-items:center;padding:18px;border-bottom:1px solid var(--line)}.drawer-body{padding:15px;overflow:auto;flex:1}.cart-item{display:grid;grid-template-columns:1fr auto;gap:10px;padding:13px 0;border-bottom:1px solid #173452}.cart-item small{display:block;color:#8da6c1;margin-top:4px}.remove{border:1px solid #284a70;background:#091d36;color:#fff;border-radius:8px;padding:5px 8px}  
+.cart-foot{padding:15px;border-top:1px solid var(--line)}.total{display:flex;justify-content:space-between;font-size:19px;font-weight:900;margin-bottom:12px}.primary{width:100%;border:0;background:#fff;color:#062f68;border-radius:12px;padding:13px;font-weight:900}.secondary{width:100%;border:1px solid var(--line);background:#091d36;color:#fff;border-radius:12px;padding:11px;margin-top:8px}  
+.modal{position:fixed;z-index:50;inset:0;display:none;place-items:center;padding:16px;background:rgba(0,0,0,.72)}.modal.open{display:grid}.modal-box{width:min(560px,100%);max-height:90vh;overflow:auto;background:#081a32;border:1px solid #244e7c;border-radius:20px;padding:20px}.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.modal-head h2{margin:0;font-size:21px}.close{border:1px solid var(--line);background:#091d36;color:#fff;border-radius:10px;padding:7px 10px}  
+.steps{display:flex;gap:7px;margin:18px 0}.step{flex:1;height:5px;border-radius:10px;background:#173452}.step.active{background:#fff}.field{margin-top:13px}.field label{display:block;color:#aac0d8;font-size:13px;margin-bottom:6px}.field input,.field select,.field textarea{width:100%;background:#06152b;color:#fff;border:1px solid #244c76;border-radius:11px;padding:12px;outline:none}.field textarea{min-height:90px;resize:vertical}.field input:focus,.field select:focus,.field textarea:focus{border-color:#3f94ef}  
+.order-items{margin-top:14px;border:1px solid #173a64;border-radius:14px;overflow:hidden}.order-item{display:flex;justify-content:space-between;gap:10px;padding:12px;border-bottom:1px solid #173452}.order-item:last-child{border-bottom:0}.order-item small{display:block;color:#8da6c1;margin-top:4px}  
+.payment-options{display:grid;gap:10px;margin-top:12px}.payment-option{border:1px solid #244c76;background:#06152b;color:#fff;border-radius:13px;padding:14px;text-align:right}.payment-option.selected{border-color:#fff;background:#0b2546}.payment-option strong{display:block}.payment-option small{display:block;color:#8da6c1;margin-top:5px}  
+.review-box{background:#06152b;border:1px solid #173a64;border-radius:14px;padding:14px;margin-top:12px;line-height:1.9}.review-row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #173452;padding:8px 0}.review-row:last-child{border-bottom:0}  
+.success-box{text-align:center;padding:10px 0 5px}.success-icon{width:70px;height:70px;margin:5px auto 15px;border-radius:50%;display:grid;place-items:center;background:#0c3a38;border:1px solid #2a9d83;color:var(--success);font-size:35px}.order-number{direction:ltr;font-weight:900;font-size:22px;color:#62adff;margin:12px 0}.status-box{background:#0b263f;border:1px solid #23547e;border-radius:12px;padding:12px;color:#b8d1e8;font-size:13px;line-height:1.7}.status{font-size:12px;color:#82a0bf}  
+footer{padding:35px 0 50px;text-align:center;color:#6f89a6;font-size:12px}.toast{position:fixed;z-index:80;bottom:20px;left:50%;transform:translateX(-50%) translateY(120px);background:#fff;color:#062f68;padding:11px 16px;border-radius:12px;font-weight:800;box-shadow:var(--shadow);transition:.25s}.toast.show{transform:translateX(-50%) translateY(0)}  
+@media(min-width:700px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.hero{padding-top:55px}}@media(min-width:1000px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:480px){.header-inner{height:62px}.brand{font-size:18px}.hero-card{padding:20px}.grid{gap:10px}.card{padding:12px}.product-name{font-size:14px}}  
+  
+.auth-tabs{display:flex;gap:8px;margin:0 0 16px}.auth-tab{flex:1;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:inherit;padding:10px;border-radius:10px;font-weight:800}.auth-tab.active{background:rgba(77,137,255,.22);border-color:rgba(100,160,255,.5)}.auth-help{font-size:13px;opacity:.78;line-height:1.7;margin-bottom:14px}.account-bar{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}.account-chip{font-size:13px;padding:7px 10px;border-radius:999px;background:rgba(255,255,255,.06)}.account-btn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:inherit;padding:8px 11px;border-radius:10px;font-weight:800}  
+</style>  
+</head>  
+<body>  
+<header class="header"><div class="wrap header-inner"><div class="brand">ABESHA <span>STORE</span></div><div class="header-actions"><button class="lang-btn" id="langBtn" type="button">EN</button><button class="icon-btn cart-btn" id="cartBtn" type="button">🛒 <span id="cartLabel">السلة</span><span class="badge" id="cartCount">0</span></button></div></div></header>  
+<main class="wrap">  
+<section class="hero"><div class="hero-card"><h1 id="heroTitle">منتجات رقمية، بسرعة ووضوح.</h1><p id="heroText">ألعاب، بطاقات هدايا، شحن واشتراكات رقمية من ABESHA STORE.</p><input class="search" id="search" placeholder="ابحث عن منتج..." autocomplete="off"></div></section>  
+<div class="account-bar" id="accountBar"></div>  
+<div class="toolbar" id="categories"><button class="cat active" data-cat="all" type="button">الكل</button><button class="cat" data-cat="mobile" type="button">شحن الألعاب</button><button class="cat" data-cat="game" type="button">الألعاب</button><button class="cat" data-cat="gift" type="button">بطاقات الهدايا</button><button class="cat" data-cat="subscription" type="button">الاشتراكات</button><button class="cat" data-cat="steam" type="button">Steam</button></div>  
+<div class="section-head"><h2 id="productsTitle">المنتجات</h2><span class="status" id="status">جاري الاتصال...</span></div>  
+<div class="notice" id="notice" style="text-align:center;font-size:15px;line-height:2.1">﴿إِنَّ اللَّهَ وَمَلَائِكَتَهُ يُصَلُّونَ عَلَى النَّبِيِّ ۚ يَا أَيُّهَا الَّذِينَ آمَنُوا صَلُّوا عَلَيْهِ وَسَلِّمُوا تَسْلِيمًا﴾</div>  
+<section class="grid" id="products"><div class="empty">جاري تحميل الكتالوج...</div></section>  
+<footer>ABESHA STORE — Digital Products</footer>  
+</main>  
+  
+<div class="drawer-backdrop" id="drawerBackdrop"></div>  
+<aside class="drawer" id="cartDrawer"><div class="drawer-head"><strong id="cartTitle">سلة المشتريات</strong><button class="close" id="closeCart" type="button">✕</button></div><div class="drawer-body" id="cartItems"></div><div class="cart-foot"><div class="total"><span id="totalLabel">الإجمالي</span><span id="cartTotal">0 SDG</span></div><button class="primary" id="checkoutBtn" type="button">متابعة الطلب</button><button class="secondary" id="clearBtn" type="button">تفريغ السلة</button></div></aside>  
+  
+<div class="modal" id="orderModal"><div class="modal-box"><div class="modal-head"><h2 id="orderTitle">متابعة الطلب</h2><button class="close" id="closeOrder" type="button">✕</button></div><div class="steps" id="orderSteps"><div class="step active"></div><div class="step"></div><div class="step"></div><div class="step"></div></div><div id="orderContent"></div></div></div>  
+<div class="modal" id="authModal"><div class="modal-box">  
+  <div class="modal-head"><h2 id="authTitle">تسجيل الدخول</h2><button class="close" id="closeAuth" type="button">✕</button></div>  
+  <div class="auth-tabs"><button id="loginTab" class="auth-tab active" type="button">دخول</button><button id="registerTab" class="auth-tab" type="button">حساب جديد</button></div>  
+  <div id="authContent"></div>  
+</div></div>  
+  
+<div class="toast" id="toast"></div>  
+  
+<script>  
+(() => {  
+"use strict";  
+  
+/* =========================  
+   STATE  
+========================= */  
+const state={  
+  products:[],  
+  filtered:[],  
+  category:"all",  
+  search:"",  
+  cart:[],  
+  lang:"ar",  
+  visibleCount:24,  
+  checkoutStep:1,  
+  customer:{name:"",phone:"",payment:"",paymentReference:"",note:""},  
+  auth:null,  
+  authMode:"login",  
+  orderNumber:""  
+};  
+  
+const $=id=>document.getElementById(id);  
+const productsBox=$("products");  
+  
+/* =========================  
+   HELPERS  
+========================= */  
+function esc(v){  
+  return String(v ?? "")  
+    .replaceAll("&","&amp;")  
+    .replaceAll("<","&lt;")  
+    .replaceAll(">","&gt;")  
+    .replaceAll('"',"&quot;")  
+    .replaceAll("'","&#039;");  
+}  
+  
+function getArray(data){  
+  if(Array.isArray(data)) return data;  
+  if(Array.isArray(data.products)) return data.products;  
+  if(Array.isArray(data.items)) return data.items;  
+  if(Array.isArray(data.data)) return data.data;  
+  if(data.data && Array.isArray(data.data.products)) return data.data.products;  
+  return [];  
+}  
+  
+function idOf(p){  
+  return String(p.id ?? p.category_id ?? p.slug ?? "");  
+}  
+  
+function nameOf(p){  
+  return p.name || p.title || p.product_name || p.productName || "منتج رقمي";  
+}  
+  
+function typeOf(p){  
+  return p.type || p.category || "Digital";  
+}  
+  
+function usdOf(p){  
+  return Number(p.price_usd ?? p.priceUSD ?? p.price ?? p.cost ?? 0);  
+}  
+  
+function categoryOf(p){  
+  const serverCategory=String(p.store_category||p.storeCategory||"").toLowerCase();  
+  if(["mobile","game","gift","subscription","steam"].includes(serverCategory)) return serverCategory;  
+  
+  const family=String(p.family||p.product_family||p.productFamily||"").toLowerCase();  
+  const raw=[  
+    p.category,p.subcategory,p.type,p.brand,p.name,p.title,p.product_name,  
+    p.productName,p.description,p.platform,p.tags  
+  ].flat().filter(Boolean).join(" ").toLowerCase();  
+  
+  if(family==="steam" || /\bsteam\b/.test(raw)) return "steam";  
+  const subscriptionSignals=[  
+    "subscription","membership","netflix","spotify","game pass",  
+    "xbox game pass","playstation plus","ps plus","apple music",  
+    "youtube premium","prime video","disney+","disney plus",  
+    "crunchyroll","discord nitro","nitro"  
+  ];  
+  if(subscriptionSignals.some(x=>raw.includes(x))) return "subscription";  
+  if(family==="giftcard" || family==="gift_card" || family==="gift-card") return "gift";  
+  if(family==="topup") return "mobile";  
+  if(family==="gamekey" || family==="game_key" || family==="game-key") return "game";  
+  if(/\b(pubg|free fire|roblox|valorant|mobile legends|call of duty mobile)\b/.test(raw)) return "mobile";  
+  if(/gift card|giftcard|google play|apple gift|playstation|xbox|nintendo/.test(raw)) return "gift";  
+  return "game";  
+}  
+function priceOf(p){  
+  const value=Number(p.price_sdg);  
+  return Number.isFinite(value)&&value>0 ? value : null;  
+}  
+  
+function formatSDG(value){  
+  return Number(value||0).toLocaleString()+" SDG";  
+}  
+  
+function cartTotal(){  
+  return state.cart.reduce((sum,item)=>sum+(Number(item.price)||0),0);  
+}  
+  
+/* =========================  
+   TOAST  
+========================= */  
+function toast(message){  
+  const el=$("toast");  
+  el.textContent=message;  
+  el.classList.add("show");  
+  clearTimeout(window.__toast);  
+  window.__toast=setTimeout(()=>el.classList.remove("show"),2200);  
+}  
+  
+/* =========================  
+   CART  
+========================= */  
+function addCart(item){  
+  state.cart.push(item);  
+  updateCart();  
+  toast(state.lang==="ar"?"تمت إضافة المنتج للسلة":"Added to cart");  
+}  
+  
+function removeCart(index){  
+  state.cart.splice(index,1);  
+  updateCart();  
+}  
+  
+function updateCart(){  
+  $("cartCount").textContent=state.cart.length;  
+  
+  if(!state.cart.length){  
+    $("cartItems").innerHTML='<div class="empty">السلة فارغة حاليًا.</div>';  
+    $("cartTotal").textContent="0 SDG";  
+    return;  
+  }  
+  
+  $("cartItems").innerHTML=state.cart.map((item,index)=>`  
+    <div class="cart-item">  
+      <div>  
+        <strong>${esc(item.name)}</strong>  
+        ${item.qty?`<small>${esc(item.qty)} UC</small>`:""}  
+        <small dir="ltr">${formatSDG(item.price)}</small>  
+      </div>  
+      <button class="remove" type="button" data-remove="${index}">حذف</button>  
+    </div>  
+  `).join("");  
+  
+  $("cartTotal").textContent=formatSDG(cartTotal());  
+  
+  document.querySelectorAll("[data-remove]").forEach(btn=>{  
+    btn.addEventListener("click",()=>removeCart(Number(btn.dataset.remove)));  
+  });  
+}  
+  
+function openCart(){  
+  $("cartDrawer").classList.add("open");  
+  $("drawerBackdrop").classList.add("open");  
+}  
+  
+function closeCart(){  
+  $("cartDrawer").classList.remove("open");  
+  $("drawerBackdrop").classList.remove("open");  
+}  
+  
+/* =========================  
+   PRODUCTS  
+========================= */  
+function render(){  
+  const q=state.search.trim().toLowerCase();  
+  
+  state.filtered=state.products.filter(p=>{  
+    const name=nameOf(p).toLowerCase();  
+    const cat=categoryOf(p);  
+    return (!q||name.includes(q)) && (state.category==="all"||cat===state.category);  
+  });  
+  
+  if(!state.filtered.length){  
+    productsBox.innerHTML='<div class="empty">لا توجد منتجات مطابقة حاليًا.</div>';  
+    return;  
+  }  
+  
+  drawProducts();  
+}  
+  
+function drawProducts(){  
+  const LIMIT=24;  
+  const visibleCount=Math.min(state.visibleCount,state.filtered.length);  
+  const visible=state.filtered.slice(0,visibleCount);  
+  
+  productsBox.innerHTML=visible.map(renderProduct).join("");  
+  
+  if(visibleCount<state.filtered.length){  
+    productsBox.innerHTML+=`  
+      <div class="empty" style="cursor:pointer" id="loadMoreProducts">  
+        عرض المزيد من المنتجات  
+        <br>  
+        <small>  
+          تم عرض ${visibleCount.toLocaleString()} من ${state.filtered.length.toLocaleString()}  
+        </small>  
+      </div>  
+    `;  
+  
+    $("loadMoreProducts").addEventListener("click",()=>{  
+      state.visibleCount+=LIMIT;  
+      drawProducts();  
+    });  
+  }  
+  
+  bindProductButtons();  
+}  
+  
+function renderProduct(p){  
+  const id=idOf(p);  
+  const name=nameOf(p);  
+  const price=priceOf(p);  
+  const icon=categoryOf(p)==="mobile"?"🎮":categoryOf(p)==="gift"?"🎁":categoryOf(p)==="subscription"?"⭐":categoryOf(p)==="steam"?"🟦":"🕹️";  
+  
+  return `  
+    <article class="card">  
+      <div class="product-icon">${icon}</div>  
+      <div class="product-name">${esc(name)}</div>  
+      <div class="product-type">${esc(typeOf(p))}</div>  
+      <div class="product-price">${price?formatSDG(price):"السعر قريبًا"}</div>  
+      <button class="buy" type="button" data-add="1" data-id="${esc(id)}" data-name="${esc(name)}" data-price="${price||0}">${price?"أضف للسلة":"غير متاح"}</button>  
+    </article>  
+  `;  
+}  
+  
+function bindProductButtons(){  
+  document.querySelectorAll("[data-add]").forEach(btn=>{  
+    btn.addEventListener("click",()=>{  
+      const price=Number(btn.dataset.price)||0;  
+      if(!price){ toast("السعر غير متاح حاليًا"); return; }  
+      addCart({  
+        productId:btn.dataset.id,  
+        name:btn.dataset.name,  
+        qty:btn.dataset.qty||"",  
+        price  
+      });  
+    });  
+  });  
+}  
+  
+/* =========================  
+   LOAD PRODUCTS  
+========================= */  
+async function loadProducts(){  
+  $("status").textContent="جاري تحميل الكتالوج...";  
+  
+  try{  
+    const r=await fetch("/api/products",{cache:"no-store",headers:{Accept:"application/json"}});  
+    if(!r.ok) throw new Error("HTTP "+r.status);  
+  
+    const data=await r.json();  
+    state.products=getArray(data);  
+  
+    $("status").textContent=state.products.length.toLocaleString()+" منتج";  
+    state.visibleCount=24;  
+    try{  
+      render();  
+    }catch(renderErr){  
+      console.error("[CATALOG RENDER]",renderErr);  
+      $("status").textContent="خطأ في عرض الكتالوج";  
+      productsBox.innerHTML='<div class="empty">تم تحميل الكتالوج لكن حدث خطأ أثناء عرضه.</div>';  
+    }  
+  }catch(err){  
+    console.error("[CATALOG FETCH]",err);  
+    $("status").textContent="تعذر الاتصال";  
+    productsBox.innerHTML='<div class="empty">تعذر تحميل الكتالوج حاليًا. حاول تحديث الصفحة.</div>';  
+  }  
+}  
+  
+/* =========================  
+   AUTHENTICATION  
+========================= */  
+function updateAccountBar(){  
+  const bar=$("accountBar");  
+  if(!bar)return;  
+  if(state.auth){  
+    bar.innerHTML=`<span class="account-chip">مرحبًا ${esc(state.auth.name)}</span><button class="account-btn" id="ordersBtn" type="button">طلباتي</button><button class="account-btn" id="logoutBtn" type="button">خروج</button>`;  
+    $("logoutBtn").addEventListener("click",logoutCustomer);  
+    $("ordersBtn").addEventListener("click",loadMyOrders);  
+  }else{  
+    bar.innerHTML=`<button class="account-btn" id="accountLoginBtn" type="button">تسجيل الدخول / إنشاء حساب</button>`;  
+    $("accountLoginBtn").addEventListener("click",()=>{state.authMode="login";renderAuth();$("authModal").classList.add("open")});  
+  }  
+}  
+  
+function renderAuth(){  
+  const isLogin=state.authMode==="login";  
+  $("authTitle").textContent=isLogin?"تسجيل الدخول":"إنشاء حساب جديد";  
+  $("loginTab").classList.toggle("active",isLogin);  
+  $("registerTab").classList.toggle("active",!isLogin);  
+  $("authContent").innerHTML=isLogin?`  
+    <div class="auth-help">لإتمام الشراء يجب تسجيل الدخول إلى حسابك. السلة ستبقى محفوظة.</div>  
+    <div class="field"><label>رقم واتساب</label><input id="authPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="رقم واتساب"></div>  
+    <div class="field"><label>كلمة المرور</label><input id="authPassword" type="password" autocomplete="current-password" placeholder="8 أحرف على الأقل"></div>  
+    <button class="primary" id="authSubmit" type="button">دخول</button>  
+  `:`  
+    <div class="auth-help">أنشئ حسابًا مرة واحدة، ثم استخدم رقم واتساب وكلمة المرور لتسجيل الدخول. لا نطلب OTP حاليًا.</div>  
+    <div class="field"><label>الاسم</label><input id="authName" type="text" autocomplete="name" placeholder="اسمك"></div>  
+    <div class="field"><label>رقم واتساب</label><input id="authPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="رقم واتساب"></div>  
+    <div class="field"><label>كلمة المرور</label><input id="authPassword" type="password" autocomplete="new-password" placeholder="8 أحرف على الأقل"></div>  
+    <div class="field"><label>تأكيد كلمة المرور</label><input id="authConfirm" type="password" autocomplete="new-password" placeholder="أعد كلمة المرور"></div>  
+    <button class="primary" id="authSubmit" type="button">إنشاء الحساب</button>  
+  `;  
+  $("authSubmit").addEventListener("click",submitAuth);  
+}  
+  
+async function submitAuth(){  
+  const phone=$("authPhone").value.trim();  
+  const password=$("authPassword").value;  
+  const body={phone,password};  
+  let endpoint="/api/auth/login";  
+  if(state.authMode==="register"){  
+    endpoint="/api/auth/register";  
+    body.name=$("authName").value.trim();  
+    body.confirmPassword=$("authConfirm").value;  
+  }  
+  const btn=$("authSubmit");btn.disabled=true;btn.textContent="جاري المعالجة...";  
+  try{  
+    const r=await fetch(endpoint,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});  
+    const data=await r.json().catch(()=>({}));  
+    if(!r.ok)throw new Error(data.error||"تعذر إتمام العملية");  
+    state.auth=data.customer;  
+    state.customer={name:data.customer.name,phone:data.customer.phone,payment:"",paymentReference:"",note:""};  
+    $("authModal").classList.remove("open");  
+    updateAccountBar();  
+    state.checkoutStep=1;  
+    renderCheckoutStep();  
+    $("orderModal").classList.add("open");  
+  }catch(err){  
+    toast(err.message);  
+  }finally{  
+    btn.disabled=false;  
+    btn.textContent=state.authMode==="login"?"دخول":"إنشاء الحساب";  
+  }  
+}  
+  
+async function logoutCustomer(){  
+  await fetch("/api/auth/logout",{method:"POST",credentials:"same-origin"}).catch(()=>{});  
+  state.auth=null;  
+  updateAccountBar();  
+  toast("تم تسجيل الخروج");  
+}  
+  
+async function loadMyOrders(){  
+  try{  
+    const r=await fetch("/api/customer/orders",{credentials:"same-origin",cache:"no-store"});  
+    const data=await r.json().catch(()=>({}));  
+    if(!r.ok)throw new Error(data.error||"تعذر تحميل الطلبات");  
+    const rows=(data.orders||[]).map(o=>`<div class="review-box" style="margin-bottom:10px"><div class="review-row"><span>${esc(o.orderNumber)}</span><strong>${formatSDG(o.total)}</strong></div><div class="review-row"><span>الحالة</span><strong>${esc(orderStatusText(o.status))}</strong></div><div class="review-row"><span>الدفع</span><strong>${esc(o.paymentMethod||"")}</strong></div><small>${new Date(o.createdAt).toLocaleString("ar-EG")}</small></div>`).join("");  
+    $("orderTitle").textContent="طلباتي";  
+    $("orderContent").innerHTML=rows||'<div class="notice">لا توجد طلبات حتى الآن.</div><button class="secondary" id="closeOrders" type="button">إغلاق</button>';  
+    if($("closeOrders"))$("closeOrders").addEventListener("click",closeCheckout);  
+    $("orderModal").classList.add("open");  
+  }catch(err){toast(err.message)}  
+}  
+  
+function orderStatusText(status){  
+  return ({PAYMENT_PENDING:"بانتظار تأكيد الدفع",PAYMENT_CONFIRMED:"تم تأكيد الدفع",PROCESSING:"قيد التنفيذ",COMPLETED:"مكتمل",FAILED:"فشل",CANCELLED:"ملغى"})[status]||status||"غير معروف";  
+}  
+  
+/* =========================  
+   CHECKOUT  
+========================= */  
+function updateSteps(){  
+  document.querySelectorAll(".step").forEach((step,index)=>{  
+    step.classList.toggle("active",index<state.checkoutStep);  
+  });  
+}  
+  
+async function openCheckout(){  
+  if(!state.cart.length){  
+    toast(state.lang==="ar"?"السلة فارغة":"Cart is empty");  
+    return;  
+  }  
+  
+  try{  
+    const r=await fetch("/api/auth/me",{credentials:"same-origin",cache:"no-store"});  
+    const data=await r.json().catch(()=>({}));  
+    if(data.authenticated){  
+      state.auth=data.customer;  
+      state.checkoutStep=1;  
+      state.customer={name:data.customer.name,phone:data.customer.phone,payment:"",paymentReference:"",note:""};  
+      updateAccountBar();  
+      updateSteps();  
+      renderCheckoutStep();  
+      $("orderModal").classList.add("open");  
+    }else{  
+      state.authMode="login";  
+      renderAuth();  
+      $("authModal").classList.add("open");  
+    }  
+  }catch(err){  
+    toast("تعذر التحقق من الحساب. حاول مرة أخرى.");  
+  }  
+}  
+  
+function closeCheckout(){  
+  $("orderModal").classList.remove("open");  
+}  
+  
+function renderCheckoutStep(){  
+  updateSteps();  
+  
+  if(state.checkoutStep===1){  
+    $("orderTitle").textContent="بيانات الحساب";  
+    $("orderContent").innerHTML=`  
+      <div class="review-box">  
+        <div class="review-row"><span>الاسم</span><strong>${esc(state.auth?.name||"")}</strong></div>  
+        <div class="review-row"><span>واتساب</span><strong dir="ltr">${esc(state.auth?.phone||"")}</strong></div>  
+      </div>  
+      <div class="field"><label>ملاحظات إضافية</label><textarea id="customerNote" placeholder="اختياري">${esc(state.customer.note)}</textarea></div>  
+      <button class="primary" id="nextStep" type="button" style="margin-top:16px">التالي</button>  
+    `;  
+    $("nextStep").addEventListener("click",()=>{  
+      state.customer.note=$("customerNote").value.trim();  
+      state.checkoutStep=2;  
+      renderCheckoutStep();  
+    });  
+    return;  
+  }  
+  
+  if(state.checkoutStep===2){  
+    $("orderTitle").textContent="اختيار طريقة الدفع";  
+    $("orderContent").innerHTML=`  
+      <div class="notice">اختر طريقة الدفع. يمكنك إدخال رقم العملية إن كان متاحًا؛ وسيظل الطلب بانتظار المراجعة حتى تأكيد الدفع.</div>  
+      <div class="payment-options">  
+        <button class="payment-option" data-payment="Bankak" type="button"><strong>🏦 Bankak</strong><small>الدفع عبر بنكك — سيتم تفعيل التفاصيل لاحقًا</small></button>  
+        <button class="payment-option" data-payment="MyCashi" type="button"><strong>💳 MyCashi</strong><small>الدفع عبر ماي كاشي — سيتم تفعيل التفاصيل لاحقًا</small></button>  
+      </div>  
+      <div class="field" style="margin-top:14px"><label>رقم العملية (اختياري)</label><input id="paymentReference" type="text" inputmode="text" placeholder="رقم مرجع التحويل"></div>  
+      <button class="secondary" id="backStep" type="button" style="margin-top:16px">رجوع</button>  
+    `;  
+  
+    document.querySelectorAll("[data-payment]").forEach(btn=>{  
+      btn.addEventListener("click",()=>{  
+        state.customer.payment=btn.dataset.payment;  
+        state.customer.paymentReference=$("paymentReference")?.value.trim()||"";  
+        state.checkoutStep=3;  
+        renderCheckoutStep();  
+      });  
+    });  
+  
+    $("backStep").addEventListener("click",()=>{  
+      state.checkoutStep=1;  
+      renderCheckoutStep();  
+    });  
+    return;  
+  }  
+  
+  if(state.checkoutStep===3){  
+    $("orderTitle").textContent="مراجعة الطلب";  
+  
+    const items=state.cart.map(item=>`  
+      <div class="order-item">  
+        <div>  
+          <strong>${esc(item.name)}</strong>  
+          ${item.qty?`<small>${esc(item.qty)} UC</small>`:""}  
+        </div>  
+        <strong>${formatSDG(item.price)}</strong>  
+      </div>  
+    `).join("");  
+  
+    $("orderContent").innerHTML=`  
+      <div class="order-items">${items}</div>  
+      <div class="review-box">  
+        <div class="review-row"><span>الاسم</span><strong>${esc(state.customer.name)}</strong></div>  
+        <div class="review-row"><span>واتساب</span><strong dir="ltr">${esc(state.customer.phone)}</strong></div>  
+        <div class="review-row"><span>الدفع</span><strong>${esc(state.customer.payment)}</strong></div>  
+        <div class="review-row"><span>رقم العملية</span><strong>${esc(state.customer.paymentReference||"—")}</strong></div>  
+        <div class="review-row"><span>الإجمالي</span><strong>${formatSDG(cartTotal())}</strong></div>  
+      </div>  
+      ${state.customer.note?`<div class="notice">ملاحظة العميل: ${esc(state.customer.note)}</div>`:""}  
+      <button class="primary" id="createTestOrder" type="button" style="margin-top:16px">إرسال الطلب</button>  
+      <button class="secondary" id="backStep" type="button">رجوع</button>  
+    `;  
+  
+    $("createTestOrder").addEventListener("click",createTestOrder);  
+    $("backStep").addEventListener("click",()=>{  
+      state.checkoutStep=2;  
+      renderCheckoutStep();  
+    });  
+    return;  
+  }  
+  
+  if(state.checkoutStep===4){  
+    $("orderTitle").textContent="تم إنشاء الطلب";  
+    $("orderContent").innerHTML=`  
+      <div class="success-box">  
+        <div class="success-icon">✓</div>  
+        <h2>تم استلام الطلب</h2>  
+        <p class="muted">رقم الطلب:</p>  
+        <div class="order-number">${esc(state.orderNumber)}</div>  
+        <div class="status-box">حالة الطلب الحالية: <strong>بانتظار تأكيد الدفع</strong><br>تم تسجيل الطلب في حسابك، وهو الآن بانتظار مراجعة وتأكيد الدفع. لا يتم تنفيذ الشحن من Fazer قبل تأكيد الدفع.</div>  
+        <button class="primary" id="finishOrder" type="button" style="margin-top:18px">إغلاق</button>  
+      </div>  
+    `;  
+  
+    $("finishOrder").addEventListener("click",()=>{  
+      closeCheckout();  
+      closeCart();  
+    });  
+  }  
+}  
+  
+async function createTestOrder(){  
+  const btn=$("createTestOrder");  
+  btn.disabled=true;  
+  btn.textContent="جاري إرسال الطلب...";  
+  try{  
+    const payload={  
+      items:state.cart.map(item=>({productId:item.productId,quantity:item.qty||1,fields:item.fields||{}})),  
+      paymentMethod:state.customer.payment,  
+      paymentReference:state.customer.paymentReference||""  
+    };  
+    const r=await fetch("/api/orders",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});  
+    const data=await r.json().catch(()=>({}));  
+    if(!r.ok)throw new Error(data.error||"تعذر إنشاء الطلب");  
+    state.orderNumber=data.order.orderNumber;  
+    state.checkoutStep=4;  
+    renderCheckoutStep();  
+  }catch(err){  
+    toast(err.message);  
+    btn.disabled=false;  
+    btn.textContent="إرسال الطلب";  
+  }  
+}  
+  
+/* =========================  
+   LANGUAGE  
+========================= */  
+function setLanguage(){  
+  const en=state.lang==="en";  
+  
+  document.documentElement.lang=en?"en":"ar";  
+  document.documentElement.dir=en?"ltr":"rtl";  
+  $("langBtn").textContent=en?"AR":"EN";  
+  $("heroTitle").textContent=en?"Digital products, fast and clear.":"منتجات رقمية، بسرعة ووضوح.";  
+  $("heroText").textContent=en?"Games, gift cards, top-ups and subscriptions from ABESHA STORE.":"ألعاب، بطاقات هدايا، شحن واشتراكات رقمية من ABESHA STORE.";  
+  $("cartLabel").textContent=en?"Cart":"السلة";  
+  $("productsTitle").textContent=en?"Products":"المنتجات";  
+  $("cartTitle").textContent=en?"Shopping Cart":"سلة المشتريات";  
+  $("totalLabel").textContent=en?"Total":"الإجمالي";  
+  $("checkoutBtn").textContent=en?"Continue":"متابعة الطلب";  
+  $("clearBtn").textContent=en?"Clear cart":"تفريغ السلة";  
+  $("search").placeholder=en?"Search products...":"ابحث عن منتج...";  
+}  
+  
+/* =========================  
+   EVENTS  
+========================= */  
+$("cartBtn").addEventListener("click",openCart);  
+$("closeCart").addEventListener("click",closeCart);  
+$("drawerBackdrop").addEventListener("click",closeCart);  
+$("checkoutBtn").addEventListener("click",openCheckout);  
+$("clearBtn").addEventListener("click",()=>{state.cart=[];updateCart();});  
+  
+$("langBtn").addEventListener("click",()=>{  
+  state.lang=state.lang==="ar"?"en":"ar";  
+  setLanguage();  
+});  
+  
+$("search").addEventListener("input",e=>{  
+  state.search=e.target.value;  
+  state.visibleCount=24;  
+  render();  
+});  
+  
+document.querySelectorAll(".cat").forEach(btn=>{  
+  btn.addEventListener("click",()=>{  
+    document.querySelectorAll(".cat").forEach(x=>x.classList.remove("active"));  
+    btn.classList.add("active");  
+    state.category=btn.dataset.cat;  
+    state.visibleCount=24;  
+    render();  
+  });  
+});  
+  
+$("closeOrder").addEventListener("click",closeCheckout);  
+$("closeAuth").addEventListener("click",()=>$("authModal").classList.remove("open"));  
+$("authModal").addEventListener("click",e=>{if(e.target===$("authModal"))$("authModal").classList.remove("open")});  
+$("loginTab").addEventListener("click",()=>{state.authMode="login";renderAuth()});  
+$("registerTab").addEventListener("click",()=>{state.authMode="register";renderAuth()});  
+$("orderModal").addEventListener("click",e=>{  
+  if(e.target===$("orderModal")) closeCheckout();  
+});  
+  
+/* =========================  
+   START  
+========================= */  
+updateCart();  
+setLanguage();  
+updateAccountBar();  
+renderAuth();  
+loadProducts();  
+  
+})();  
+</script>  
+</body>  
+</html>  
