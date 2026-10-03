@@ -2196,4 +2196,4 @@ async function buildPricedCatalog() {
       async game => {
         const gameId =
           String(
-            game.game
+            
