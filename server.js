@@ -292,11 +292,10 @@ async function saveStoreSettingsToDatabase(settings) {
     `, [STORE_SETTINGS_VERSION, JSON.stringify(settings)]);
     return true;
   } catch (error) {
-    console.warn("[STORE SETTINGS] Could not save settings to PostgreSQL:", error.message);
+    console.warn("[STORE SETTINGS] Could not save settings from PostgreSQL:", error.message);
     return false;
   }
 }
-
 // ======================================================
 // ABESHA STORE — التسعير المركزي
 // ======================================================
@@ -618,1002 +617,395 @@ const DEFAULT_STORE_SETTINGS = {
 
 function cloneDefaultStoreSettings() {
   return JSON.parse(JSON.stringify(DEFAULT_STORE_SETTINGS));
-    }
-  }
-
-  const usablePrices = products.filter(
-    product =>
-      Number.isFinite(Number(product.price_sdg)) &&
-      Number(product.price_sdg) > 0
-  ).length;
-
-  console.log(
-    `[PRICE CACHE] Built ${products.length} catalog entries; ${usablePrices} have prices`
-  );
-
-  pricedCatalogCache = products;
-  pricedCatalogBuiltAt = Date.now();
-
-  savePriceCacheToDisk(products);
-  void savePriceCacheToDatabase(products, pricedCatalogBuiltAt);
-
-  return products;
 }
 
-async function getPricedCatalog() {
-  if (cacheIsAvailable()) {
-    return pricedCatalogCache;
-  }
+function normalizeStoreSettings(parsed) {
+  const defaults = cloneDefaultStoreSettings();
+  const pricing = parsed && parsed.pricing && typeof parsed.pricing === "object"
+    ? parsed.pricing
+    : {};
 
-  throw new Error(
-    "Pricing catalog is not available locally. Automatic Fazer catalog rebuild is disabled."
-  );
+  const tiers = Array.isArray(pricing.tiers) && pricing.tiers.length === 4
+    ? pricing.tiers.map((tier, index) => ({
+        maxCost: tier.maxCost == null ? null : Number(tier.maxCost),
+        markup: Number(tier.markup)
+      })).filter(t => Number.isFinite(t.markup) && t.markup >= 0)
+    : defaults.pricing.tiers;
+  hiddenIds: [],
+  discounts: {},
+  pricing: {
+    usdToSdg: DEFAULT_USD_TO_SDG,
+    tiers: [
+      { maxCost: 20000, markup: 0.07 },
+      { maxCost: 100000, markup: 0.08 },
+      { maxCost: 300000, markup: 0.09 },
+      { maxCost: null, markup: 0.10 }
+    ],
+    rounding: {
+      under10000: 100,
+      from10000To100000: 500,
+      from100000To500000: 1000,
+      from500000: 5000
+    }
+  }
+};
+
+function cloneDefaultStoreSettings() {
+  return JSON.parse(JSON.stringify(DEFAULT_STORE_SETTINGS));
 }
 
-loadPriceCacheFromDisk();
+function normalizeStoreSettings(parsed) {
+  const defaults = cloneDefaultStoreSettings();
+  const pricing = parsed && parsed.pricing && typeof parsed.pricing === "object"
+    ? parsed.pricing
+    : {};
+
+  const tiers = Array.isArray(pricing.tiers) && pricing.tiers.length === 4
+    ? pricing.tiers.map((tier, index) => ({
+        maxCost: tier.maxCost == null ? null : Number(tier.maxCost),
+        markup: Number(tier.markup)
+      })).filter(t => Number.isFinite(t.markup) && t.markup >= 0)
+    : defaults.pricing.tiers;
 
-// ======================================================
-// الصحة
-// ======================================================
-
-app.get("/health", (req, res) => {
-  res.json({
-    ok: true,
-    service: "ABESHA STORE",
-    status: "running",
-    pricing: {
-      usdToSdg: getPricingConfig().usdToSdg,
-      cacheAvailable: cacheIsAvailable(),
-      cacheFresh: cacheIsFresh(),
-      cachedProducts: pricedCatalogCache?.length || 0
-    }
-  });
-});
-
-// ======================================================
-// Fazer /me
-// ======================================================
-
-app.get("/api/fazer/me", requireAdmin, async (req, res) => {
-  try {
-    const data = await fazerGet("/me");
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Fazer catalog
-// ======================================================
-
-app.get("/api/fazer/catalog", requireAdmin, async (req, res) => {
-  try {
-    // Fazer v2 has no unified /catalog endpoint. Build this compatibility
-    // response from the documented family-specific catalogs instead.
-    const results = await Promise.allSettled([
-      getAllCategories("topups"),
-      getAllCategories("giftcards"),
-      getAllCategories("gamekeys")
-    ]);
-
-    const topups = results[0].status === "fulfilled" ? results[0].value : [];
-    const giftcards = results[1].status === "fulfilled" ? results[1].value : [];
-    const gamekeys = results[2].status === "fulfilled" ? results[2].value : [];
-
-    res.json({
-      ok: true,
-      families: {
-        topups: { ok: results[0].status === "fulfilled", items: topups },
-        giftcards: { ok: results[1].status === "fulfilled", items: giftcards },
-        gamekeys: { ok: results[2].status === "fulfilled", items: gamekeys }
-      },
-      total: topups.length + giftcards.length + gamekeys.length
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Topups
-// ======================================================
-
-app.get("/api/fazer/topups", requireAdmin, async (req, res) => {
-  try {
-    const items = await getAllCategories("topups");
-
-    res.json({
-      ok: true,
-      kind: "topup",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/topups/offers", requireAdmin, async (req, res) => {
-  try {
-    const categoryId = req.query.category_id;
-
-    if (!categoryId) {
-      return res.status(400).json({
-        ok: false,
-        error: "category_id is required"
-      });
-    }
-
-    const data = await fazerGet(
-      `/topups/offers?category_id=${encodeURIComponent(categoryId)}`
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Gift Cards
-// ======================================================
-
-app.get("/api/fazer/giftcards", requireAdmin, async (req, res) => {
-  try {
-    const items = await getAllCategories("giftcards");
-
-    res.json({
-      ok: true,
-      kind: "gift_card",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/giftcards/cards", requireAdmin, async (req, res) => {
-  try {
-    const categoryId = req.query.category_id;
-
-    if (!categoryId) {
-      return res.status(400).json({
-        ok: false,
-        error: "category_id is required"
-      });
-    }
-
-    const data = await fazerGet(
-      `/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// المنتجات — النسخة المسعّرة
-// ======================================================
-
-app.get("/api/products", async (req, res) => {
-  try {
-    const products = await getPricedCatalog();
-    const visibleProducts = getPublicProducts(products);
-
-    res.json({
-      ok: true,
-      total: visibleProducts.length,
-      products: visibleProducts,
-      pricing: {
-        currency: "SDG",
-        catalogMode: storeSettings.catalogMode
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// تحديث الأسعار يدويًا عند الحاجة
-// ======================================================
-
-app.post("/api/prices/refresh", requireAdmin, async (req, res) => {
-  try {
-    const products = repriceCachedCatalog();
-
-    res.json({
-      ok: true,
-      total: products.length,
-      refreshedAt: new Date().toISOString(),
-      source: "local-cache"
-    });
-  } catch (error) {
-    res.status(503).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// PUBG ID validation
-// ======================================================
-
-app.post("/api/fazer/topups/validate-id", requireAdmin, async (req, res) => {
-  try {
-    const { category_id, fields } = req.body;
-
-    const data = await fazerFetch(
-      "/topups/validate-id",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          category_id,
-          fields
-        })
-      }
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Game Keys
-// ======================================================
-
-app.get("/api/fazer/gamekeys", requireAdmin, async (req, res) => {
-  try {
-    const items = await getAllCategories("gamekeys");
-
-    res.json({
-      ok: true,
-      kind: "game_key",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Steam
-// ======================================================
-
-app.get("/api/fazer/steam-topup/rates", requireAdmin, async (req, res) => {
-  try {
-    const data = await fazerGet("/steam-topup/rates");
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/steam-gifts/games", requireAdmin, async (req, res) => {
-  try {
-    const limit = req.query.limit || "100";
-
-    const data = await fazerGet(
-      `/steam-gifts/games?limit=${encodeURIComponent(limit)}`
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// الكتالوج الموحد القديم — محفوظ للتوافق
-// ======================================================
-
-app.get("/api/catalog", requireAdmin, async (req, res) => {
-  try {
-    const familyResults = await Promise.allSettled([
-      getAllCategories("topups"),
-      getAllCategories("giftcards"),
-      getAllCategories("gamekeys")
-    ]);
-
-    const topups = familyResults[0].status === "fulfilled"
-      ? familyResults[0].value
-      : [];
-    const giftcards = familyResults[1].status === "fulfilled"
-      ? familyResults[1].value
-      : [];
-    const gamekeys = familyResults[2].status === "fulfilled"
-      ? familyResults[2].value
-      : [];
-
-    const products = [
-      ...topups.map(item => ({
-        id: item.category_id,
-        name: item.name,
-        type: "topup",
-        note: item.note || "",
-        fields: item.fields || []
-      })),
-
-      ...giftcards.map(item => ({
-        id: item.category_id,
-        name: item.name,
-        type: "gift_card",
-        note: item.note || "",
-        fields: item.fields || []
-      })),
-
-      ...gamekeys.map(item => ({
-        id: item.game_id || item.category_id,
-        name: item.name,
-        type: "game_key",
-        platform: item.platform || "",
-        region: item.region || "",
-        region_restriction: item.region_restriction || false
-      }))
-    ];
-
-    res.json({
-      ok: true,
-      total: products.length,
-      products
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// المنتجات المنشورة
-// ======================================================
-
-app.get("/api/catalog/published", (req, res) => {
-  try {
-    const configPath = path.join(
-      __dirname,
-      "catalog-config.json"
-    );
-
-    const config = JSON.parse(
-      fs.readFileSync(configPath, "utf8")
-    );
-
-    res.json({
-      ok: true,
-      total: Array.isArray(config.published)
-        ? config.published.length
-        : 0,
-      published: Array.isArray(config.published)
-        ? config.published
-        : [],
-      pricing: config.pricing || {}
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// الإدارة
-// ======================================================
-
-app.get("/api/admin/status", (req, res) => {
-  res.json({
-    ok: true,
-    adminKeyConfigured: Boolean(process.env.ADMIN_KEY)
-  });
-});
-
-function requireAdmin(req, res, next) {
-  const adminKey = req.headers["x-admin-key"];
-
-  if (!process.env.ADMIN_KEY) {
-    return res.status(500).json({
-      ok: false,
-      error: "ADMIN_KEY is not configured"
-    });
-  }
-
-  if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
-    return res.status(401).json({
-      ok: false,
-      error: "Unauthorized"
-    });
-  }
-
-  next();
-}
-
-app.get("/api/admin/catalog/summary", requireAdmin, async (req, res) => {
-  try {
-    const data = await getPricedCatalog();
-    const summary = { all: data.length, priced: 0, mobile: 0, game: 0, gift: 0, subscription: 0, steam: 0, unknown: 0 };
-    for (const product of data) {
-      if (Number(product.price_sdg) > 0) summary.priced += 1;
-      const category = product.store_category || classifyStoreCategory(product);
-      if (Object.prototype.hasOwnProperty.call(summary, category)) summary[category] += 1;
-      else summary.unknown += 1;
-    }
-    res.json({ ok: true, summary });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/admin/catalog", requireAdmin, async (req, res) => {
-  try {
-    const data = await getPricedCatalog();
-
-    res.json({
-      ok: true,
-      total: data.length,
-      products: data.map(getAdminProduct),
-      settings: storeSettings,
-      pricing: {
-        usdToSdg: getPricingConfig().usdToSdg,
-        tiers: getPricingConfig().tiers
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.get("/api/admin/settings", requireAdmin, (req, res) => {
-  res.json({
-    ok: true,
-    settings: storeSettings,
-    pricing: {
-      usdToSdg: getPricingConfig().usdToSdg,
-      tiers: getPricingConfig().tiers
-    }
-  });
-});
-
-app.post("/api/admin/pricing", requireAdmin, async (req, res) => {
-  try {
-    const body = req.body || {};
-    const usdToSdg = Number(body.usdToSdg);
-    if (!Number.isFinite(usdToSdg) || usdToSdg <= 0) {
-      return res.status(400).json({ ok: false, error: "usdToSdg must be a positive number" });
-    }
-
-    const rawTiers = Array.isArray(body.tiers) ? body.tiers : getPricingConfig().tiers;
-    if (rawTiers.length !== 4) {
-      return res.status(400).json({ ok: false, error: "Exactly 4 pricing tiers are required" });
-    }
-
-    const tiers = rawTiers.map((tier, index) => ({
-      maxCost: index === 3 ? null : Number(tier.maxCost),
-      markup: Number(tier.markup)
-    }));
-
-    if (tiers.some((tier, index) =>
-      !Number.isFinite(tier.markup) || tier.markup < 0 ||
-      (index < 3 && (!Number.isFinite(tier.maxCost) || tier.maxCost <= 0))
-    )) {
-      return res.status(400).json({ ok: false, error: "Invalid pricing tiers" });
-    }
-
-    storeSettings.pricing = {
-      usdToSdg,
-      tiers,
-      rounding: {
-        ...getPricingConfig().rounding,
-        ...(body.rounding || {})
-      }
-    };
-
-    void saveStoreSettingsNow();
-
-    // Recalculate existing cached products locally.
-    // Never rebuild the catalog from Fazer as a side effect of a pricing change.
-    const products = repriceCachedCatalog();
-
-    res.json({
-      ok: true,
-      pricing: getPricingConfig(),
-      repricedProducts: products.length,
-      source: "local-cache",
-      updatedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/admin/catalog/mode", requireAdmin, (req, res) => {
-  const mode = String(req.body?.mode || "").trim();
-
-  if (!["all", "curated"].includes(mode)) {
-    return res.status(400).json({
-      ok: false,
-      error: "mode must be all or curated"
-    });
-  }
-
-  storeSettings.catalogMode = mode;
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    catalogMode: storeSettings.catalogMode
-  });
-});
-
-app.post("/api/admin/catalog/publish", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  storeSettings.hiddenIds = storeSettings.hiddenIds.filter(id => id !== productId);
-
-  if (!storeSettings.publishedIds.includes(productId)) {
-    storeSettings.publishedIds.push(productId);
-  }
-
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    published: true
-  });
-});
-
-app.post("/api/admin/catalog/unpublish", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  storeSettings.publishedIds = storeSettings.publishedIds.filter(id => id !== productId);
-  storeSettings.hiddenIds = Array.from(
-    new Set([...storeSettings.hiddenIds, productId])
-  );
-
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    published: false
-  });
-});
-
-app.post("/api/admin/catalog/discount", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-  const discount = normalizeDiscount(req.body?.discount);
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  if (!discount) {
-    return res.status(400).json({
-      ok: false,
-      error: "Invalid discount"
-    });
-  }
-
-  storeSettings.discounts[productId] = discount;
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    discount
-  });
-});
-
-app.delete("/api/admin/catalog/discount/:productId", requireAdmin, (req, res) => {
-  const productId = String(req.params.productId || "").trim();
-
-  delete storeSettings.discounts[productId];
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    discount: null
-  });
-});
-
-// ======================================================
-// لوحة الإدارة — لا تحتاج ملف HTML منفصل
-// ======================================================
-
-app.get("/admin", (req, res) => {
-  res.type("html").send(`<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ABESHA STORE — الإدارة</title>
-<style>
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#071426;color:#eef5ff}
-header{padding:18px 16px;background:#0b1f3a;border-bottom:1px solid #1d416e;position:sticky;top:0;z-index:5}
-h1{margin:0 0 6px;font-size:22px}.muted{color:#9fb3cc;font-size:13px}
-.wrap{max-width:1200px;margin:auto;padding:16px}
-.panel{background:#0b1f3a;border:1px solid #1d416e;border-radius:14px;padding:14px;margin-bottom:14px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input,select,button{font:inherit;border-radius:9px;border:1px solid #31577f;padding:10px}
-input,select{background:#071426;color:#fff;min-width:180px}button{background:#123866;color:#fff;cursor:pointer}
-button.primary{background:#1769aa}button.danger{background:#7d2633}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.stat{background:#071426;border-radius:10px;padding:12px}.num{font-size:22px;font-weight:bold;margin-top:5px}
-#products{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-.card{background:#0b1f3a;border:1px solid #1d416e;border-radius:12px;padding:13px}
-.card h3{font-size:15px;margin:0 0 8px;line-height:1.4}.price{font-size:19px;font-weight:bold}
-.badge{display:inline-block;padding:4px 7px;border-radius:7px;background:#123866;color:#cfe6ff;font-size:11px;margin:2px}
-.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
-.small{font-size:12px;color:#a9bdd3}.discount{color:#ffd36b}
-.hidden{display:none}
-</style>
-</head>
-<body>
-<header>
-  <div class="wrap" style="padding:0">
-    <h1>ABESHA STORE — لوحة الإدارة</h1>
-    <div class="muted">إدارة المنتجات، النشر، الأسعار والعروض</div>
-  </div>
-</header>
-<main class="wrap">
-  <section class="panel">
-    <div class="row">
-      <input id="key" type="password" placeholder="ADMIN_KEY">
-      <button class="primary" onclick="loadAll()">دخول وتحميل الكتالوج</button>
-      <select id="mode" onchange="changeMode()">
-        <option value="all">عرض كل المنتجات الحالية</option>
-        <option value="curated">عرض المنتجات التي أختارها فقط</option>
-      </select>
-    </div>
-    <div id="msg" class="muted" style="margin-top:9px"></div>
-  </section>
-
-  <section class="panel">
-    <div class="stats">
-      <div class="stat">إجمالي الكتالوج<div class="num" id="total">—</div></div>
-      <div class="stat">المنشور<div class="num" id="published">—</div></div>
-      <div class="stat">المخفي<div class="num" id="hidden">—</div></div>
-      <div class="stat">عروض نشطة<div class="num" id="discounts">—</div></div>
-    </div>
-  </section>
-
-  <section class="panel">
-    <div class="row">
-      <input id="search" placeholder="ابحث باسم المنتج..." oninput="render()">
-      <select id="type" onchange="render()">
-        <option value="">كل الأقسام</option>
-        <option value="topup">Topups</option>
-        <option value="gift_card">Gift Cards</option>
-        <option value="game_key">Game Keys</option>
-        <option value="steam">Steam</option>
-        <option value="subscription">Subscriptions</option>
-      </select>
-      <select id="publishedFilter" onchange="render()">
-        <option value="">الكل</option>
-        <option value="published">منشور</option>
-        <option value="hidden">مخفي</option>
-      </select>
-    </div>
-  </section>
-
-  <section id="products"></section>
-</main>
-
-<script>
-let catalog = [];
-let settings = null;
-
-function headers() {
   return {
-    "Content-Type": "application/json",
-    "x-admin-key": document.getElementById("key").value.trim()
+    ...defaults,
+    ...(parsed && typeof parsed === "object" ? parsed : {}),
+    publishedIds: Array.isArray(parsed?.publishedIds) ? parsed.publishedIds : [],
+    hiddenIds: Array.isArray(parsed?.hiddenIds) ? parsed.hiddenIds : [],
+    discounts: parsed?.discounts && typeof parsed.discounts === "object"
+      ? parsed.discounts
+      : {},
+    pricing: {
+      ...defaults.pricing,
+      ...pricing,
+      usdToSdg: Number.isFinite(Number(pricing.usdToSdg)) && Number(pricing.usdToSdg) > 0
+        ? Number(pricing.usdToSdg)
+        : defaults.pricing.usdToSdg,
+      tiers: tiers.length === 4 ? tiers : defaults.pricing.tiers,
+      rounding: { ...defaults.pricing.rounding, ...(pricing.rounding || {}) }
+    }
   };
 }
 
-function msg(text, error = false) {
-  const el = document.getElementById("msg");
-  el.textContent = text || "";
-  el.style.color = error ? "#ff9d9d" : "";
-}
-
-async function api(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers(),
-      ...(options.headers || {})
-    }
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || "Request failed");
-  }
-
-  return data;
-}
-
-async function loadAll() {
+function saveStoreSettings(settings) {
   try {
-    msg("جاري تحميل الكتالوج...");
-    const data = await api("/api/admin/catalog");
-    catalog = Array.isArray(data.products) ? data.products : [];
-    settings = data.settings || {};
-    document.getElementById("mode").value = settings.catalogMode || "all";
-    updateStats();
-    render();
-    msg("تم تحميل الكتالوج بنجاح");
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-function updateStats() {
-  const published = catalog.filter(x => x.published).length;
-  const hidden = catalog.filter(x => !x.published).length;
-  const discounts = catalog.filter(x => x.discount && x.discount.active !== false).length;
-
-  document.getElementById("total").textContent = catalog.length;
-  document.getElementById("published").textContent = published;
-  document.getElementById("hidden").textContent = hidden;
-  document.getElementById("discounts").textContent = discounts;
-}
-
-function esc(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function money(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n.toLocaleString("en-US") + " SDG" : "—";
-}
-
-function render() {
-  const root = document.getElementById("products");
-  const q = document.getElementById("search").value.trim().toLowerCase();
-  const type = document.getElementById("type").value;
-  const publishedFilter = document.getElementById("publishedFilter").value;
-
-  const filtered = catalog.filter(product => {
-    if (q && !String(product.name || "").toLowerCase().includes(q)) return false;
-    if (type && product.type !== type && product.store_category !== type) return false;
-    if (publishedFilter === "published" && !product.published) return false;
-    if (publishedFilter === "hidden" && product.published) return false;
-    return true;
-  });
-
-  root.innerHTML = filtered.map(product => {
-    const discount = product.discount;
-    const hasDiscount = discount && discount.active !== false;
-
-    return `
-      <article class="card">
-        <h3>${esc(product.name)}</h3>
-        <div>
-          <span class="badge">${esc(product.type || "")}</span>
-          <span class="badge">${esc(product.store_category || "")}</span>
-          ${product.published
-            ? '<span class="badge">منشور</span>'
-            : '<span class="badge">مخفي</span>'}
-        </div>
-
-        <div style="margin-top:10px">
-          <div class="price">${money(product.price_sdg)}</div>
-          ${
-            hasDiscount
-              ? `<div class="small discount">عرض: ${esc(discount.label || "عرض خاص")}</div>`
-              : ""
-          }
-        </div>
-
-        <div class="small" style="margin-top:7px">
-          ID: ${esc(product.id)}
-        </div>
-
-        <div class="actions">
-          ${
-            product.published
-              ? `<button class="danger" onclick="unpublish('${encodeURIComponent(product.id)}')">إخفاء</button>`
-              : `<button class="primary" onclick="publish('${encodeURIComponent(product.id)}')">نشر</button>`
-          }
-          <button onclick="setDiscount('${encodeURIComponent(product.id)}')">خصم</button>
-          ${
-            hasDiscount
-              ? `<button onclick="removeDiscount('${encodeURIComponent(product.id)}')">إلغاء الخصم</button>`
-              : ""
-          }
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  if (!filtered.length) {
-    root.innerHTML = '<section class="panel"><div class="muted">لا توجد نتائج</div></section>';
-  }
-}
-
-async function publish(id) {
-  try {
-    await api("/api/admin/catalog/publish", {
-      method: "POST",
-      body: JSON.stringify({ productId: decodeURIComponent(id) })
-    });
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function unpublish(id) {
-  try {
-    await api("/api/admin/catalog/unpublish", {
-      method: "POST",
-      body: JSON.stringify({ productId: decodeURIComponent(id) })
-    });
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function setDiscount(id) {
-  const productId = decodeURIComponent(id);
-  const type = prompt("نوع الخصم: percent أو fixed", "percent");
-  if (!type) return;
-
-  const value = prompt(
-    type === "fixed"
-      ? "قيمة الخصم بالجنيه السوداني"
-      : "نسبة الخصم",
-    "5"
-  );
-
-  if (!value) return;
-
-  const label = prompt("اسم العرض", "عرض خاص") || "عرض خاص";
-
-  try {
-    await api("/api/admin/catalog/discount", {
-      method: "POST",
-      body: JSON.stringify({
-        productId,
-        discount: {
-          type,
-          value: Number(value),
-          label,
-          active: true
-        }
-      })
-    });
-
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function removeDiscount(id) {
-  try {
-    await api(
-      "/api/admin/catalog/discount/" + encodeURIComponent(decodeURIComponent(id)),
-      { method: "DELETE" }
+    fs.writeFileSync(
+      STORE_SETTINGS_FILE,
+      JSON.stringify(normalizeStoreSettings(settings), null, 2),
+      "utf8"
     );
-    await loadAll();
   } catch (error) {
-    msg(error.message, true);
+    console.warn("[STORE SETTINGS] Could not save settings:", error.message);
   }
 }
 
-async function changeMode() {
-  const mode = document.getElementById("mode").value;
-
+function loadStoreSettings() {
   try {
-    await api("/api/admin/catalog/mode", {
-      method: "POST",
-      body: JSON.stringify({ mode })
-    });
-    await loadAll();
+    if (!fs.existsSync(STORE_SETTINGS_FILE)) {
+      const settings = cloneDefaultStoreSettings();
+      saveStoreSettings(settings);
+      return settings;
+    }
+
+    const parsed = JSON.parse(fs.readFileSync(STORE_SETTINGS_FILE, "utf8"));
+    return normalizeStoreSettings(parsed);
   } catch (error) {
-    msg(error.message, true);
+    console.warn("[STORE SETTINGS] Could not load settings:", error.message);
+    return cloneDefaultStoreSettings();
   }
+}
+
+let storeSettings = loadStoreSettings();
+
+function normalizeDiscount(raw) {
+  if (!raw || typeof raw !== "object") return null;
+
+  const type = raw.type === "fixed" ? "fixed" : "percent";
+  const value = Number(raw.value);
+  const startsAt = raw.startsAt ? new Date(raw.startsAt).toISOString() : null;
+  const endsAt = raw.endsAt ? new Date(raw.endsAt).toISOString() : null;
+  const active = raw.active !== false;
+
+  if (!Number.isFinite(value) || value <= 0) return null;
+  if (type === "percent" && value >= 100) return null;
+  if (type === "fixed" && value >= 100000000) return null;
+
+  return {
+    type,
+    value,
+    startsAt,
+    endsAt,
+    active,
+    label: String(raw.label || "عرض خاص").trim().slice(0, 100)
+  };
+}
+
+function isDiscountActive(discount) {
+  if (!discount || discount.active === false) return false;
+
+  const now = Date.now();
+
+  if (discount.startsAt) {
+    const start = Date.parse(discount.startsAt);
+    if (Number.isFinite(start) && now < start) return false;
+  }
+
+  if (discount.endsAt) {
+    const end = Date.parse(discount.endsAt);
+    if (Number.isFinite(end) && now > end) return false;
+  }
+
+  return true;
+}
+
+function applyDiscount(basePrice, discount) {
+  const base = Number(basePrice);
+  if (!Number.isFinite(base) || base <= 0 || !isDiscountActive(discount)) {
+    return {
+      price: basePrice,
+      originalPrice: null,
+      discount: null
+    };
+  }
+
+  let sale = base;
+
+  if (discount.type === "fixed") {
+    sale = base - Number(discount.value);
+  } else {
+    sale = base * (1 - Number(discount.value) / 100);
+  }
+
+  sale = roundCommercialPrice(Math.max(100, sale));
+
+  if (!sale || sale >= base) {
+    return {
+      price: basePrice,
+      originalPrice: null,
+      discount: null
+    };
+  }
+
+  return {
+    price: sale,
+    originalPrice: base,
+    discount
+  };
+}
+
+function productVisibility(product) {
+  const id = String(product.id || "");
+
+  if (storeSettings.hiddenIds.includes(id)) return false;
+
+  if (storeSettings.catalogMode === "curated") {
+    return storeSettings.publishedIds.includes(id);
+  }
+
+  return true;
+}
+
+function classifyStoreCategory(product) {
+  const family = String(product.family || product.product_family || product.productFamily || "").toLowerCase().replace(/[\s_-]+/g, "");
+  const type = String(product.type || "").toLowerCase().replace(/[\s_-]+/g, "");
+  const raw = [
+    product.category, product.subcategory, product.brand, product.name,
+    product.title, product.base_name, product.product_name, product.productName,
+    product.description, product.platform, product.region, product.tags,
+    product.offer?.category, product.offer?.subcategory, product.offer?.brand,
+    product.offer?.name, product.offer?.title, product.offer?.description,
+    product.offer?.platform, product.offer?.tags
+  ].flat().filter(Boolean).join(" ").toLowerCase();
+
+  if (family === "steam" || type === "steam" || /\bsteam\b/.test(raw)) return "steam";
+
+  const subscriptionSignals = [
+    "subscription", "membership", "netflix", "spotify", "game pass",
+    "xbox game pass", "playstation plus", "ps plus", "apple music",
+    "youtube premium", "prime video", "disney+", "disney plus",
+    "crunchyroll", "discord nitro", "nitro", "subscription card"
+  ];
+  if (subscriptionSignals.some(x => raw.includes(x))) return "subscription";
+
+  if (family === "giftcard" || family === "gift_card" || family === "gift-card" || type === "giftcard" || type === "gift_card") return "gift";
+  if (family === "topup" || type === "topup") return "mobile";
+  if (family === "gamekey" || type === "gamekey") return "game";
+
+  if (/\b(pubg|free fire|roblox|valorant|mobile legends|call of duty mobile)\b/.test(raw)) return "mobile";
+  if (/gift card|giftcard|google play|apple gift|playstation|xbox|nintendo/.test(raw)) return "gift";
+  return "game";
+}
+
+function enrichProductForStore(product) {
+  const basePrice = Number(product.price_sdg);
+  const discount = storeSettings.discounts[String(product.id)];
+  const pricing = applyDiscount(basePrice, discount);
+
+  const result = {
+    ...product,
+    price_sdg: pricing.price,
+    store_category: product.store_category || classifyStoreCategory(product),
+    original_price_sdg: pricing.originalPrice,
+    discount: pricing.discount
+  };
+
+  // Supplier cost and raw supplier offer details are internal.
+  delete result.source_price_usd;
+  delete result.cost_sdg;
+  delete result.markup_percent;
+  delete result.price_usd;
+  delete result.offer;
+
+  return result;
+}
+
+function getAdminProduct(product) {
+  const discount = storeSettings.discounts[String(product.id)] || null;
+
+  return {
+    ...product,
+    published: productVisibility(product),
+    discount
+  };
+}
+
+function getPublicProducts(products) {
+  return products
+    .filter(productVisibility)
+    .filter(product => Number(product.price_sdg) > 0)
+    .map(enrichProductForStore);
+}
+
+async function saveStoreSettingsNow() {
+  storeSettings.version = STORE_SETTINGS_VERSION;
+  saveStoreSettings(storeSettings);
+  await saveStoreSettingsToDatabase(storeSettings);
+}
+
+// ======================================================
+// Cache الأسعار
+// ======================================================
+
+function loadPriceCacheFromDisk() {
+  try {
+    if (!fs.existsSync(PRICE_CACHE_FILE)) {
+      return;
+    }
+
+    const raw = fs.readFileSync(PRICE_CACHE_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+
+    if (
+      parsed &&
+      parsed.version === PRICE_CACHE_VERSION &&
+      Array.isArray(parsed.products) &&
+      Number.isFinite(parsed.builtAt)
+    ) {
+      pricedCatalogCache = parsed.products;
+      pricedCatalogBuiltAt = parsed.builtAt;
+      console.log(
+        `[PRICE CACHE] Loaded ${pricedCatalogCache.length} products from disk`
+      );
+    }
+  } catch (error) {
+    console.warn(
+      "[PRICE CACHE] Could not load cache:",
+      error.message
+    );
+  }
+}
+
+function savePriceCacheToDisk(products) {
+  try {
+    fs.writeFileSync(
+      PRICE_CACHE_FILE,
+      JSON.stringify(
+        {
+          version: PRICE_CACHE_VERSION,
+          builtAt: Date.now(),
+          usdToSdg: getPricingConfig().usdToSdg,
+          products
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+    document.getElementById("mode").value=settings.catalogMode||"all";
+    updateStats();render();msg("تم تحميل الكتالوج.");
+  }catch(e){msg(e.message)}
+}
+function updateStats(){
+  document.getElementById("total").textContent=data.length;
+  document.getElementById("published").textContent=data.filter(p=>p.published).length;
+  document.getElementById("hidden").textContent=data.filter(p=>!p.published).length;
+  document.getElementById("discounts").textContent=data.filter(p=>p.discount && p.discount.active!==false).length;
+}
+function render(){
+  const q=document.getElementById("search").value.trim().toLowerCase();
+  const type=document.getElementById("type").value;
+  const list=data.filter(p=>(!q||String(p.name||"").toLowerCase().includes(q))&&(!type||p.type===type));
+  const box=document.getElementById("products");
+  box.innerHTML=list.slice(0,500).map(p=>{
+    const d=p.discount;
+    const price=Number(p.price_sdg||0);
+    const state=p.published?"منشور":"مخفي";
+    return '<article class="card">'+
+      '<h3>'+esc(p.name)+'</h3>'+
+      '<div class="small">'+esc(p.type)+' · '+esc(p.id)+'</div>'+
+      '<div class="price">'+price.toLocaleString("en-US")+' SDG</div>'+
+      (d?'<div class="discount">عرض: '+esc(d.label)+' — '+(d.type==="percent"?d.value+"%":d.value.toLocaleString("en-US")+" SDG")+'</div>':'')+
+      '<div><span class="badge">'+state+'</span>'+((p.stock!==undefined&&p.stock!==null)?'<span class="badge">Stock: '+esc(p.stock)+'</span>':'')+'</div>'+
+      '<div class="actions">'+
+      '<button class="primary" onclick="togglePublish('+JSON.stringify(p.id)+','+(!p.published)+')">'+(p.published?"إخفاء":"نشر")+'</button>'+
+      '<button onclick="setDiscount('+JSON.stringify(p.id)+')">عرض/خصم</button>'+
+      (d?'<button class="danger" onclick="removeDiscount('+JSON.stringify(p.id)+')">إزالة العرض</button>':'')+
+      '</div></article>'
+  }).join("");
+}
+async function togglePublish(id,publish){
+  try{
+    await api(publish?"/api/admin/catalog/publish":"/api/admin/catalog/unpublish",{
+      method:"POST",body:JSON.stringify({productId:id})
+    });
+    const p=data.find(x=>x.id===id);if(p)p.published=publish;
+    updateStats();render();msg(publish?"تم نشر المنتج.":"تم إخفاء المنتج.");
+  }catch(e){msg(e.message)}
+}
+async function setDiscount(id){
+  const type=prompt("نوع الخصم: percent للنسبة أو fixed لمبلغ SDG","percent");
+  if(type===null)return;
+  if(!["percent","fixed"].includes(type.trim())){msg("نوع الخصم غير صحيح.");return}
+  const value=prompt(type==="percent"?"نسبة الخصم":"قيمة الخصم بالجنيه السوداني","10");
+  if(value===null)return;
+  const n=Number(value);
+  if(!Number.isFinite(n)||n<=0){msg("قيمة الخصم غير صحيحة.");return}
+  const label=prompt("اسم العرض","عرض خاص");
+  if(label===null)return;
+  try{
+    const j=await api("/api/admin/catalog/discount",{method:"POST",body:JSON.stringify({
+      productId:id,discount:{type,value:n,label,active:true}
+    })});
+    const p=data.find(x=>x.id===id);if(p)p.discount=j.discount;
+    updateStats();render();msg("تم حفظ العرض.");
+  }catch(e){msg(e.message)}
+}
+async function removeDiscount(id){
+  try{
+    await api("/api/admin/catalog/discount/"+encodeURIComponent(id),{method:"DELETE"});
+    const p=data.find(x=>x.id===id);if(p)p.discount=null;
+    updateStats();render();msg("تمت إزالة العرض.");
+  }catch(e){msg(e.message)}
+}
+async function changeMode(){
+  if(!key){msg("أدخل ADMIN_KEY أولاً.");return}
+  try{
+    const mode=document.getElementById("mode").value;
+    await api("/api/admin/catalog/mode",{method:"POST",body:JSON.stringify({mode})});
+    settings.catalogMode=mode;
+    msg(mode==="all"?"تم تفعيل عرض كل المنتجات.":"تم تفعيل الوضع الانتقائي.");
+    updateStats();render();
+  }catch(e){msg(e.message)}
 }
 </script>
 </body>
@@ -1621,2638 +1013,356 @@ async function changeMode() {
 });
 
 // ======================================================
-// Customer Authentication
+// الطلبات — تخزين محلي + PostgreSQL إن وُجد
 // ======================================================
 
-app.get("/api/auth/me", async (req, res) => {
-  try {
-    const customer = await getCurrentCustomer(req);
-    if (!customer) {
-      return res.json({
-        ok: true,
-        authenticated: false,
-        customer: null
-      });
-    }
+function generateOrderId() {
+  return `AB-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+}
 
-    res.json({
-      ok: true,
-      authenticated: true,
-      customer
-    });
-  } catch (error) {
-    res.status(503).json({
-      ok: false,
-      error: "Authentication service unavailable"
-    });
-  }
-});
+function normalizeOrderStatus(status) {
+  const allowed = [
+    "pending",
+    "paid",
+    "processing",
+    "completed",
+    "cancelled",
+    "failed"
+  ];
 
-app.post("/api/auth/register", async (req, res) => {
-  if (!requireDatabase(res)) return;
+  return allowed.includes(status) ? status : "pending";
+}
 
-  try {
-    if (authRateLimited(req)) {
-      return res.status(429).json({
-        ok: false,
-        error: "Too many attempts. Please try again later."
-      });
-    }
+function sanitizeOrderItem(item) {
+  return {
+    productId: String(item?.productId || item?.id || "").trim(),
+    name: String(item?.name || "").trim().slice(0, 300),
+    type: String(item?.type || "").trim().slice(0, 50),
+    quantity: Math.max(1, Number(item?.quantity) || 1),
+    priceSdg: Number(item?.priceSdg ?? item?.price_sdg) || 0,
+    fields: item?.fields && typeof item.fields === "object"
+      ? item.fields
+      : {}
+  };
+}
 
-    const name = cleanName(req.body?.name);
-    const phone = normalizePhone(req.body?.phone);
-    const password = String(req.body?.password || "");
+function sanitizeOrderPayload(body) {
+  const items = Array.isArray(body?.items)
+    ? body.items.map(sanitizeOrderItem).filter(item => item.productId && item.name)
+    : [];
 
-    if (name.length < 2) {
-      return res.status(400).json({
-        ok: false,
-        error: "Please enter a valid name"
-      });
-    }
-
-    if (phone.length < 8) {
-      return res.status(400).json({
-        ok: false,
-        error: "Please enter a valid phone number"
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        ok: false,
-        error: "Password must be at least 6 characters"
-      });
-    }
-
-    const existing = await dbPool.query(
-      "SELECT id FROM customers WHERE phone = $1 LIMIT 1",
-      [phone]
-    );
-
-    if (existing.rows[0]) {
-      return res.status(409).json({
-        ok: false,
-        error: "This phone number is already registered"
-      });
-    }
-
-    const passwordData = await hashPassword(password);
-
-    const result = await dbPool.query(`
-      INSERT INTO customers (
-        name,
-        phone,
-        password_hash,
-        password_salt
-      )
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, name, phone
-    `, [
-      name,
-      phone,
-      passwordData.hash,
-      passwordData.salt
-    ]);
-
-    const customer = result.rows[0];
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = hashSessionToken(token);
-
-    await dbPool.query(`
-      INSERT INTO sessions (
-        customer_id,
-        token_hash,
-        expires_at
-      )
-      VALUES ($1, $2, NOW() + INTERVAL '30 days')
-    `, [customer.id, tokenHash]);
-
-    setSessionCookie(res, token);
-
-    res.status(201).json({
-      ok: true,
-      authenticated: true,
-      customer
-    });
-  } catch (error) {
-    console.error("[AUTH] Registration failed:", error.message);
-    res.status(500).json({
-      ok: false,
-      error: "Could not create account"
-    });
-  }
-});
-
-app.post("/api/auth/login", async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    if (authRateLimited(req)) {
-      return res.status(429).json({
-        ok: false,
-        error: "Too many attempts. Please try again later."
-      });
-    }
-
-    const phone = normalizePhone(req.body?.phone);
-    const password = String(req.body?.password || "");
-
-    if (phone.length < 8 || !password) {
-      return res.status(400).json({
-        ok: false,
-        error: "Phone and password are required"
-      });
-    }
-
-    const result = await dbPool.query(`
-      SELECT id, name, phone, password_hash, password_salt
-      FROM customers
-      WHERE phone = $1
-      LIMIT 1
-    `, [phone]);
-
-    const customer = result.rows[0];
-
-    if (!customer) {
-      return res.status(401).json({
-        ok: false,
-        error: "Invalid phone or password"
-      });
-    }
-
-    const valid = await verifyPassword(
-      password,
-      customer.password_hash,
-      customer.password_salt
-    );
-
-    if (!valid) {
-      return res.status(401).json({
-        ok: false,
-        error: "Invalid phone or password"
-      });
-    }
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = hashSessionToken(token);
-
-    await dbPool.query(`
-      INSERT INTO sessions (
-        customer_id,
-        token_hash,
-        expires_at
-      )
-      VALUES ($1, $2, NOW() + INTERVAL '30 days')
-    `, [customer.id, tokenHash]);
-
-    setSessionCookie(res, token);
-
-    res.json({
-      ok: true,
-      authenticated: true,
-      customer: {
-        id: customer.id,
-        name: customer.name,
-        phone: customer.phone
+  const customer = body?.customer && typeof body.customer === "object"
+    ? {
+        name: String(body.customer.name || "").trim().slice(0, 100),
+        phone: String(body.customer.phone || "").trim().slice(0, 50),
+        email: String(body.customer.email || "").trim().slice(0, 160)
       }
-    });
-  } catch (error) {
-    console.error("[AUTH] Login failed:", error.message);
-    res.status(500).json({
-      ok: false,
-      error: "Could not login"
-    });
-  }
-});
-
-app.post("/api/auth/logout", async (req, res) => {
-  try {
-    const token = parseCookies(req)[SESSION_COOKIE];
-
-    if (dbPool && token) {
-      await dbPool.query(
-        "DELETE FROM sessions WHERE token_hash = $1",
-        [hashSessionToken(token)]
-      );
-    }
-
-    clearSessionCookie(res);
-
-    res.json({
-      ok: true,
-      authenticated: false
-    });
-  } catch (error) {
-    clearSessionCookie(res);
-    res.json({
-      ok: true,
-      authenticated: false
-    });
-  }
-});
-
-// ======================================================
-// Customer Orders
-// ======================================================
-
-function makeOrderNumber() {
-  const now = new Date();
-  const stamp = now
-    .toISOString()
-    .replace(/\D/g, "")
-    .slice(0, 14);
-
-  const random = crypto
-    .randomBytes(3)
-    .toString("hex")
-    .toUpperCase();
-
-  return `ABS-${stamp}-${random}`;
-}
-
-function normalizeOrderItems(items) {
-  if (!Array.isArray(items)) return [];
-
-  return items
-    .map(item => {
-      const quantity = Math.max(
-        1,
-        Math.min(100, Number.parseInt(item?.quantity, 10) || 1)
-      );
-
-      return {
-        productId: String(item?.productId || item?.id || "").slice(0, 200),
-        productName: String(item?.productName || item?.name || "").trim().slice(0, 500),
-        quantity,
-        fields: item?.fields && typeof item.fields === "object"
-          ? item.fields
-          : {}
+    : {
+        name: "",
+        phone: "",
+        email: ""
       };
-    })
-    .filter(item => item.productId && item.productName);
-}
 
-async function buildOrderFromCatalog(customer, rawItems, paymentMethod) {
-  const products = await getPricedCatalog();
-  const productMap = new Map(
-    products
-      .filter(productVisibility)
-      .filter(product => Number(product.price_sdg) > 0)
-      .map(product => [String(product.id), product])
-  );
+  const payment = body?.payment && typeof body.payment === "object"
+    ? {
+        method: String(body.payment.method || "").trim().slice(0, 50),
+        reference: String(body.payment.reference || "").trim().slice(0, 120)
+      }
+    : {
+        method: "",
+        reference: ""
+      };
 
-  const items = normalizeOrderItems(rawItems);
-
-  if (!items.length) {
-    const error = new Error("Order must contain at least one product");
-    error.status = 400;
-    throw error;
-  }
-
-  const normalized = [];
-
-  for (const item of items) {
-    const product = productMap.get(item.productId);
-
-    if (!product) {
-      const error = new Error(`Product unavailable: ${item.productId}`);
-      error.status = 400;
-      throw error;
-    }
-
-    const enriched = enrichProductForStore(product);
-    const unitPrice = Number(enriched.price_sdg);
-
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      const error = new Error(`Product has no valid price: ${item.productName}`);
-      error.status = 400;
-      throw error;
-    }
-
-    normalized.push({
-      productId: String(product.id),
-      productName: String(enriched.name || item.productName),
-      quantity: item.quantity,
-      unitPrice,
-      fields: item.fields || {}
-    });
-  }
-
-  const total = normalized.reduce(
-    (sum, item) => sum + item.unitPrice * item.quantity,
+  const totalSdg = items.reduce(
+    (sum, item) => sum + item.priceSdg * item.quantity,
     0
   );
 
   return {
-    paymentMethod: String(paymentMethod || "bankak").trim().toLowerCase(),
-    items: normalized,
-    total
+    id: generateOrderId(),
+    createdAt: new Date().toISOString(),
+    status: "pending",
+    customer,
+    payment,
+    items,
+    totalSdg
   };
 }
 
-app.post("/api/orders", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  const client = await dbPool.connect();
-
+function loadOrdersFromDisk() {
   try {
-    const { paymentMethod, items } = await buildOrderFromCatalog(
-      req.customer,
-      req.body?.items,
-      req.body?.paymentMethod
+    if (!fs.existsSync(ORDERS_FILE)) return [];
+
+    const parsed = JSON.parse(
+      fs.readFileSync(ORDERS_FILE, "utf8")
     );
 
-    const allowedPayments = ["bankak", "mycashi"];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    console.warn("[ORDERS] Could not load orders:", error.message);
+    return [];
+  }
+}
 
-    if (!allowedPayments.includes(paymentMethod)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid payment method"
-      });
-    }
+function saveOrdersToDisk(orders) {
+  try {
+    fs.writeFileSync(
+      ORDERS_FILE,
+      JSON.stringify(orders, null, 2),
+      "utf8"
+    );
+  } catch (error) {
+    console.warn("[ORDERS] Could not save orders:", error.message);
+  }
+}
 
-    const orderNumber = makeOrderNumber();
+let orders = loadOrdersFromDisk();
 
-    await client.query("BEGIN");
+function addOrderLocal(order) {
+  orders.unshift(order);
 
-    const orderResult = await client.query(`
+  if (orders.length > 5000) {
+    orders = orders.slice(0, 5000);
+  }
+
+  saveOrdersToDisk(orders);
+}
+
+function updateOrderLocal(orderId, patch) {
+  const index = orders.findIndex(order => order.id === orderId);
+
+  if (index === -1) return null;
+
+  orders[index] = {
+    ...orders[index],
+    ...patch,
+    updatedAt: new Date().toISOString()
+  };
+
+  saveOrdersToDisk(orders);
+
+  return orders[index];
+}
+
+async function saveOrderToDatabase(order) {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `
       INSERT INTO orders (
-        order_number,
-        customer_id,
+        id,
+        status,
         customer_name,
         customer_phone,
-        status,
+        customer_email,
         payment_method,
-        payment_status,
-        total_sdg
+        payment_reference,
+        total_sdg,
+        items,
+        created_at
       )
       VALUES (
         $1,
         $2,
         $3,
         $4,
-        'PENDING_PAYMENT',
         $5,
-        'PENDING',
-        $6
+        $6,
+        $7,
+        $8,
+        $9::jsonb,
+        $10
       )
-      RETURNING id, order_number, status, payment_method, payment_status, total_sdg, created_at
-    `, [
-      orderNumber,
-      req.customer.id,
-      req.customer.name,
-      req.customer.phone,
-      paymentMethod,
-      total
-    ]);
-
-    const order = orderResult.rows[0];
-
-    for (const item of items) {
-      await client.query(`
-        INSERT INTO order_items (
-          order_id,
-          product_id,
-          product_name,
-          quantity,
-          unit_price_sdg,
-          fields_json
-        )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-      `, [
+      ON CONFLICT (id) DO NOTHING
+      `,
+      [
         order.id,
-        item.productId,
-        item.productName,
-        item.quantity,
-        item.unitPrice,
-        JSON.stringify(item.fields || {})
-      ]);
+        order.status,
+        order.customer.name,
+        order.customer.phone,
+        order.customer.email,
+        order.payment.method,
+        order.payment.reference,
+        order.totalSdg,
+        JSON.stringify(order.items),
+        order.createdAt
+      ]
+    );
+  } catch (error) {
+    console.warn("[ORDERS] Could not save order to database:", error.message);
+  }
+}
+
+async function updateOrderInDatabase(orderId, patch) {
+  if (!pool) return;
+
+  try {
+    await pool.query(
+      `
+      UPDATE orders
+      SET
+        status = COALESCE($2, status),
+        payment_reference = COALESCE($3, payment_reference),
+        updated_at = NOW()
+      WHERE id = $1
+      `,
+      [
+        orderId,
+        patch.status || null,
+        patch.paymentReference || null
+      ]
+    );
+  } catch (error) {
+    console.warn("[ORDERS] Could not update order in database:", error.message);
+  }
+}
+
+app.post("/api/orders", async (req, res) => {
+  try {
+    const order = sanitizeOrderPayload(req.body);
+
+    if (!order.items.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "At least one product is required"
+      });
     }
 
-    await client.query("COMMIT");
+    if (order.totalSdg <= 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "Order total must be greater than zero"
+      });
+    }
+
+    addOrderLocal(order);
+    await saveOrderToDatabase(order);
 
     res.status(201).json({
       ok: true,
-      order: {
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items
-      }
-    });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("[ORDERS] Create order failed:", error.message);
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message || "Could not create order"
-    });
-  } finally {
-    client.release();
-  }
-});
-
-app.get("/api/customer/orders", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const result = await dbPool.query(`
-      SELECT
-        o.id,
-        o.order_number,
-        o.status,
-        o.payment_method,
-        o.payment_status,
-        o.total_sdg,
-        o.created_at,
-        o.updated_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'productId', oi.product_id,
-              'productName', oi.product_name,
-              'quantity', oi.quantity,
-              'unitPrice', oi.unit_price_sdg,
-              'fields', oi.fields_json
-            )
-            ORDER BY oi.id
-          ) FILTER (WHERE oi.id IS NOT NULL),
-          '[]'::json
-        ) AS items
-      FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.customer_id = $1
-      GROUP BY o.id
-      ORDER BY o.created_at DESC
-      LIMIT 100
-    `, [req.customer.id]);
-
-    res.json({
-      ok: true,
-      orders: result.rows.map(order => ({
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: Array.isArray(order.items) ? order.items.map(item => ({
-          ...item,
-          unitPrice: Number(item.unitPrice)
-        })) : []
-      }))
+      order
     });
   } catch (error) {
     res.status(500).json({
       ok: false,
-      error: "Could not load orders"
+      error: error.message
     });
   }
 });
 
-app.get("/api/orders/:orderNumber", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderResult = await dbPool.query(`
-      SELECT
-        id,
-        order_number,
-        status,
-        payment_method,
-        payment_status,
-        payment_reference,
-        total_sdg,
-        created_at,
-        updated_at
-      FROM orders
-      WHERE order_number = $1
-        AND customer_id = $2
-      LIMIT 1
-    `, [
-      String(req.params.orderNumber),
-      req.customer.id
-    ]);
-
-    const order = orderResult.rows[0];
-
-    if (!order) {
-      return res.status(404).json({
-        ok: false,
-        error: "Order not found"
-      });
-    }
-
-    const itemsResult = await dbPool.query(`
-      SELECT
-        product_id,
-        product_name,
-        quantity,
-        unit_price_sdg,
-        fields_json
-      FROM order_items
-      WHERE order_id = $1
-      ORDER BY id
-    `, [order.id]);
-
-    res.json({
-      ok: true,
-      order: {
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: itemsResult.rows.map(item => ({
-          productId: item.product_id,
-          productName: item.product_name,
-          quantity: item.quantity,
-          unitPrice: Number(item.unit_price_sdg),
-          fields: item.fields_json || {}
-        }))
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not load order"
-    });
-  }
-});
-
-app.post("/api/customer/reorder", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderNumber = String(req.body?.orderNumber || "").trim();
-
-    if (!orderNumber) {
-      return res.status(400).json({
-        ok: false,
-        error: "orderNumber is required"
-      });
-    }
-
-    const result = await dbPool.query(`
-      SELECT
-        oi.product_id,
-        oi.product_name,
-        oi.quantity,
-        oi.fields_json
-      FROM orders o
-      JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.order_number = $1
-        AND o.customer_id = $2
-      ORDER BY oi.id
-    `, [orderNumber, req.customer.id]);
-
-    if (!result.rows.length) {
-      return res.status(404).json({
-        ok: false,
-        error: "Order not found"
-      });
-    }
-
-    const products = await getPricedCatalog();
-    const productMap = new Map(
-      products
-        .filter(productVisibility)
-        .filter(product => Number(product.price_sdg) > 0)
-        .map(product => [String(product.id), product])
-    );
-
-    const items = [];
-
-    for (const row of result.rows) {
-      const product = productMap.get(String(row.product_id));
-      if (!product) continue;
-
-      items.push({
-        productId: String(product.id),
-        productName: String(product.name || row.product_name),
-        quantity: Math.max(1, Number(row.quantity) || 1),
-        fields: row.fields_json || {}
-      });
-    }
-
-    res.json({
-      ok: true,
-      items
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not prepare reorder"
-    });
-  }
-});
-
-// ======================================================
-// Admin Orders
-// ======================================================
-
-app.get("/api/admin/orders", requireAdmin, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const status = String(req.query.status || "").trim();
-
-    const params = [];
-    let where = "";
-
-    if (status) {
-      params.push(status);
-      where = `WHERE o.status = $${params.length}`;
-    }
-
-    const result = await dbPool.query(`
-      SELECT
-        o.id,
-        o.order_number,
-        o.customer_name,
-        o.customer_phone,
-        o.status,
-        o.payment_method,
-        o.payment_status,
-        o.payment_reference,
-        o.total_sdg,
-        o.created_at,
-        o.updated_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'productId', oi.product_id,
-              'productName', oi.product_name,
-              'quantity', oi.quantity,
-              'unitPrice', oi.unit_price_sdg,
-              'fields', oi.fields_json
-            )
-            ORDER BY oi.id
-          ) FILTER (WHERE oi.id IS NOT NULL),
-          '[]'::json
-        ) AS items
-      FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.id
-      ${where}
-      GROUP BY o.id
-      ORDER BY o.created_at DESC
-      LIMIT 500
-    `, params);
-
-    res.json({
-      ok: true,
-      orders: result.rows.map(order => ({
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: Array.isArray(order.items) ? order.items.map(item => ({
-          ...item,
-          unitPrice: Number(item.unitPrice)
-        })) : []
-      }))
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not load admin orders"
-    });
-  }
-});
-
-app.post("/api/admin/orders/:orderNumber/confirm-payment", requireAdmin, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderNumber = String(req.params.orderNumber || "").trim();
-    const paymentReference = String(
-      req.body?.paymentReference ||
-      req.body?.reference ||
-      ""
-    ).trim().slice(0, 120);
-
-    if (!orderNumber) {
-      return res.status(400).json({
-        ok: false,
-        error: "orderNumber is required"
-      });
-    }
-
-    const result = await dbPool.query(`
-      UPDATE orders
-      SET
-        status = 'PAID',
-        payment_status = 'CONFIRMED',
-        payment_reference = $1,
-        updated_at = NOW()
-      WHERE order_number = $2
-      RETURNING
-        id,
-        order_number,
-        customer_id,
-        customer_name,
-        customer_phone,
-        status,
-        payment_method,
-        payment_status,
-        payment_reference,
-        total_sdg,
-        created_at,
-        updated_at
-    `, [paymentReference || null, orderNumber]);
-
-    const order = result.rows[0];
-
-    if (!order) {
-      return res.status(404).json({
-        ok: false,
-        error: "Order not found"
-      });
-    }
-
-    res.json({
-      ok: true,
-      order: {
-        ...order,
-        total_sdg: Number(order.total_sdg)
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not confirm payment"
-    });
-  }
-});
-
-// ======================================================
-// Root
-// ======================================================
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-// ======================================================
-// بدء التشغيل
-// ======================================================
-
-async function startServer() {
-  try {
-    await initDatabase();
-
-    // Database is the primary persistent source when available.
-    // Disk files remain as a fallback for local/development deployments.
-    await loadStoreSettingsFromDatabase();
-
-    const loadedFromDb = await loadPriceCacheFromDatabase();
-
-    if (!loadedFromDb) {
-      loadPriceCacheFromDisk();
-    }
-
-    if (!cacheIsAvailable()) {
-      console.log("[PRICE CACHE] No local/database catalog cache found.");
-      console.log("[PRICE CACHE] Building catalog from Fazer once at startup...");
-
-      try {
-        await buildPricedCatalog();
-      } catch (error) {
-        console.error("[PRICE CACHE] Initial catalog build failed:", error.message);
-      }
-    } else {
-      console.log(
-        `[PRICE CACHE] Using cached catalog with ${pricedCatalogCache.length} products`
-      );
-    }
-
-    app.listen(PORT, () => {
-      console.log(`ABESHA STORE running on port ${PORT}`);
-      console.log(`Pricing USD/SDG: ${getPricingConfig().usdToSdg}`);
-      console.log(`Catalog cache: ${pricedCatalogCache?.length || 0} products`);
-      console.log(`Database: ${dbPool ? "enabled" : "disabled"}`);
-    });
-  } catch (error) {
-    console.error("[STARTUP] Fatal error:", error);
-    process.exit(1);
-  }
-}
-
-startServer();
-  }
-
-  const usablePrices = products.filter(
-    product =>
-      Number.isFinite(Number(product.price_sdg)) &&
-      Number(product.price_sdg) > 0
-  ).length;
-
-  console.log(
-    `[PRICE CACHE] Built ${products.length} catalog entries; ${usablePrices} have prices`
+app.get("/api/orders/:id", (req, res) => {
+  const order = orders.find(
+    item => item.id === String(req.params.id)
   );
 
-  pricedCatalogCache = products;
-  pricedCatalogBuiltAt = Date.now();
-
-  savePriceCacheToDisk(products);
-  void savePriceCacheToDatabase(products, pricedCatalogBuiltAt);
-
-  return products;
-}
-
-async function getPricedCatalog() {
-  if (cacheIsAvailable()) {
-    return pricedCatalogCache;
+  if (!order) {
+    return res.status(404).json({
+      ok: false,
+      error: "Order not found"
+    });
   }
 
-  throw new Error(
-    "Pricing catalog is not available locally. Automatic Fazer catalog rebuild is disabled."
-  );
-}
-
-loadPriceCacheFromDisk();
-
-// ======================================================
-// الصحة
-// ======================================================
-
-app.get("/health", (req, res) => {
   res.json({
     ok: true,
-    service: "ABESHA STORE",
-    status: "running",
-    pricing: {
-      usdToSdg: getPricingConfig().usdToSdg,
-      cacheAvailable: cacheIsAvailable(),
-      cacheFresh: cacheIsFresh(),
-      cachedProducts: pricedCatalogCache?.length || 0
-    }
+    order
   });
 });
 
-// ======================================================
-// Fazer /me
-// ======================================================
-
-app.get("/api/fazer/me", requireAdmin, async (req, res) => {
-  try {
-    const data = await fazerGet("/me");
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Fazer catalog
-// ======================================================
-
-app.get("/api/fazer/catalog", requireAdmin, async (req, res) => {
-  try {
-    // Fazer v2 has no unified /catalog endpoint. Build this compatibility
-    // response from the documented family-specific catalogs instead.
-    const results = await Promise.allSettled([
-      getAllCategories("topups"),
-      getAllCategories("giftcards"),
-      getAllCategories("gamekeys")
-    ]);
-
-    const topups = results[0].status === "fulfilled" ? results[0].value : [];
-    const giftcards = results[1].status === "fulfilled" ? results[1].value : [];
-    const gamekeys = results[2].status === "fulfilled" ? results[2].value : [];
-
-    res.json({
-      ok: true,
-      families: {
-        topups: { ok: results[0].status === "fulfilled", items: topups },
-        giftcards: { ok: results[1].status === "fulfilled", items: giftcards },
-        gamekeys: { ok: results[2].status === "fulfilled", items: gamekeys }
-      },
-      total: topups.length + giftcards.length + gamekeys.length
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Topups
-// ======================================================
-
-app.get("/api/fazer/topups", requireAdmin, async (req, res) => {
-  try {
-    const items = await getAllCategories("topups");
-
-    res.json({
-      ok: true,
-      kind: "topup",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/topups/offers", requireAdmin, async (req, res) => {
-  try {
-    const categoryId = req.query.category_id;
-
-    if (!categoryId) {
-      return res.status(400).json({
-        ok: false,
-        error: "category_id is required"
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        items: await getCustomerOrderItems(row.id)
       });
     }
-
-    const data = await fazerGet(
-      `/topups/offers?category_id=${encodeURIComponent(categoryId)}`
-    );
-
-    res.json(data);
+    res.json({ ok: true, total: orders.length, orders });
   } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
+    res.status(500).json({ ok: false, error: "تعذر تحميل الطلبات." });
   }
 });
 
-// ======================================================
-// Gift Cards
-// ======================================================
-
-app.get("/api/fazer/giftcards", requireAdmin, async (req, res) => {
+app.post("/api/admin/orders/:orderNumber/status", requireAdmin, async (req, res) => {
   try {
-    const items = await getAllCategories("giftcards");
+    const orderNumber = String(req.params.orderNumber || "").trim();
+    const status = String(req.body?.status || "").trim().toUpperCase();
 
-    res.json({
-      ok: true,
-      kind: "gift_card",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/giftcards/cards", requireAdmin, async (req, res) => {
-  try {
-    const categoryId = req.query.category_id;
-
-    if (!categoryId) {
-      return res.status(400).json({
-        ok: false,
-        error: "category_id is required"
-      });
-    }
-
-    const data = await fazerGet(
-      `/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// المنتجات — النسخة المسعّرة
-// ======================================================
-
-app.get("/api/products", async (req, res) => {
-  try {
-    const products = await getPricedCatalog();
-    const visibleProducts = getPublicProducts(products);
-
-    res.json({
-      ok: true,
-      total: visibleProducts.length,
-      products: visibleProducts,
-      pricing: {
-        currency: "SDG",
-        catalogMode: storeSettings.catalogMode
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// تحديث الأسعار يدويًا عند الحاجة
-// ======================================================
-
-app.post("/api/prices/refresh", requireAdmin, async (req, res) => {
-  try {
-    const products = repriceCachedCatalog();
-
-    res.json({
-      ok: true,
-      total: products.length,
-      refreshedAt: new Date().toISOString(),
-      source: "local-cache"
-    });
-  } catch (error) {
-    res.status(503).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// PUBG ID validation
-// ======================================================
-
-app.post("/api/fazer/topups/validate-id", requireAdmin, async (req, res) => {
-  try {
-    const { category_id, fields } = req.body;
-
-    const data = await fazerFetch(
-      "/topups/validate-id",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          category_id,
-          fields
-        })
-      }
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Game Keys
-// ======================================================
-
-app.get("/api/fazer/gamekeys", requireAdmin, async (req, res) => {
-  try {
-    const items = await getAllCategories("gamekeys");
-
-    res.json({
-      ok: true,
-      kind: "game_key",
-      items,
-      meta: {
-        total: items.length,
-        limit: items.length,
-        next_cursor: null,
-        has_more: false
-      }
-    });
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// Steam
-// ======================================================
-
-app.get("/api/fazer/steam-topup/rates", requireAdmin, async (req, res) => {
-  try {
-    const data = await fazerGet("/steam-topup/rates");
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-app.get("/api/fazer/steam-gifts/games", requireAdmin, async (req, res) => {
-  try {
-    const limit = req.query.limit || "100";
-
-    const data = await fazerGet(
-      `/steam-gifts/games?limit=${encodeURIComponent(limit)}`
-    );
-
-    res.json(data);
-  } catch (error) {
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message,
-      details: error.data || null
-    });
-  }
-});
-
-// ======================================================
-// الكتالوج الموحد القديم — محفوظ للتوافق
-// ======================================================
-
-app.get("/api/catalog", requireAdmin, async (req, res) => {
-  try {
-    const familyResults = await Promise.allSettled([
-      getAllCategories("topups"),
-      getAllCategories("giftcards"),
-      getAllCategories("gamekeys")
-    ]);
-
-    const topups = familyResults[0].status === "fulfilled"
-      ? familyResults[0].value
-      : [];
-    const giftcards = familyResults[1].status === "fulfilled"
-      ? familyResults[1].value
-      : [];
-    const gamekeys = familyResults[2].status === "fulfilled"
-      ? familyResults[2].value
-      : [];
-
-    const products = [
-      ...topups.map(item => ({
-        id: item.category_id,
-        name: item.name,
-        type: "topup",
-        note: item.note || "",
-        fields: item.fields || []
-      })),
-
-      ...giftcards.map(item => ({
-        id: item.category_id,
-        name: item.name,
-        type: "gift_card",
-        note: item.note || "",
-        fields: item.fields || []
-      })),
-
-      ...gamekeys.map(item => ({
-        id: item.game_id || item.category_id,
-        name: item.name,
-        type: "game_key",
-        platform: item.platform || "",
-        region: item.region || "",
-        region_restriction: item.region_restriction || false
-      }))
+    const allowed = [
+      "PAYMENT_PENDING",
+      "PAID",
+      "PROCESSING",
+      "COMPLETED",
+      "CANCELLED",
+      "FAILED"
     ];
 
-    res.json({
-      ok: true,
-      total: products.length,
-      products
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// المنتجات المنشورة
-// ======================================================
-
-app.get("/api/catalog/published", (req, res) => {
-  try {
-    const configPath = path.join(
-      __dirname,
-      "catalog-config.json"
-    );
-
-    const config = JSON.parse(
-      fs.readFileSync(configPath, "utf8")
-    );
-
-    res.json({
-      ok: true,
-      total: Array.isArray(config.published)
-        ? config.published.length
-        : 0,
-      published: Array.isArray(config.published)
-        ? config.published
-        : [],
-      pricing: config.pricing || {}
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-// ======================================================
-// الإدارة
-// ======================================================
-
-app.get("/api/admin/status", (req, res) => {
-  res.json({
-    ok: true,
-    adminKeyConfigured: Boolean(process.env.ADMIN_KEY)
-  });
-});
-
-function requireAdmin(req, res, next) {
-  const adminKey = req.headers["x-admin-key"];
-
-  if (!process.env.ADMIN_KEY) {
-    return res.status(500).json({
-      ok: false,
-      error: "ADMIN_KEY is not configured"
-    });
-  }
-
-  if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
-    return res.status(401).json({
-      ok: false,
-      error: "Unauthorized"
-    });
-  }
-
-  next();
-}
-
-app.get("/api/admin/catalog/summary", requireAdmin, async (req, res) => {
-  try {
-    const data = await getPricedCatalog();
-    const summary = { all: data.length, priced: 0, mobile: 0, game: 0, gift: 0, subscription: 0, steam: 0, unknown: 0 };
-    for (const product of data) {
-      if (Number(product.price_sdg) > 0) summary.priced += 1;
-      const category = product.store_category || classifyStoreCategory(product);
-      if (Object.prototype.hasOwnProperty.call(summary, category)) summary[category] += 1;
-      else summary.unknown += 1;
-    }
-    res.json({ ok: true, summary });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.get("/api/admin/catalog", requireAdmin, async (req, res) => {
-  try {
-    const data = await getPricedCatalog();
-
-    res.json({
-      ok: true,
-      total: data.length,
-      products: data.map(getAdminProduct),
-      settings: storeSettings,
-      pricing: {
-        usdToSdg: getPricingConfig().usdToSdg,
-        tiers: getPricingConfig().tiers
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.get("/api/admin/settings", requireAdmin, (req, res) => {
-  res.json({
-    ok: true,
-    settings: storeSettings,
-    pricing: {
-      usdToSdg: getPricingConfig().usdToSdg,
-      tiers: getPricingConfig().tiers
-    }
-  });
-});
-
-app.post("/api/admin/pricing", requireAdmin, async (req, res) => {
-  try {
-    const body = req.body || {};
-    const usdToSdg = Number(body.usdToSdg);
-    if (!Number.isFinite(usdToSdg) || usdToSdg <= 0) {
-      return res.status(400).json({ ok: false, error: "usdToSdg must be a positive number" });
-    }
-
-    const rawTiers = Array.isArray(body.tiers) ? body.tiers : getPricingConfig().tiers;
-    if (rawTiers.length !== 4) {
-      return res.status(400).json({ ok: false, error: "Exactly 4 pricing tiers are required" });
-    }
-
-    const tiers = rawTiers.map((tier, index) => ({
-      maxCost: index === 3 ? null : Number(tier.maxCost),
-      markup: Number(tier.markup)
-    }));
-
-    if (tiers.some((tier, index) =>
-      !Number.isFinite(tier.markup) || tier.markup < 0 ||
-      (index < 3 && (!Number.isFinite(tier.maxCost) || tier.maxCost <= 0))
-    )) {
-      return res.status(400).json({ ok: false, error: "Invalid pricing tiers" });
-    }
-
-    storeSettings.pricing = {
-      usdToSdg,
-      tiers,
-      rounding: {
-        ...getPricingConfig().rounding,
-        ...(body.rounding || {})
-      }
-    };
-
-    void saveStoreSettingsNow();
-
-    // Recalculate existing cached products locally.
-    // Never rebuild the catalog from Fazer as a side effect of a pricing change.
-    const products = repriceCachedCatalog();
-
-    res.json({
-      ok: true,
-      pricing: getPricingConfig(),
-      repricedProducts: products.length,
-      source: "local-cache",
-      updatedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-app.post("/api/admin/catalog/mode", requireAdmin, (req, res) => {
-  const mode = String(req.body?.mode || "").trim();
-
-  if (!["all", "curated"].includes(mode)) {
-    return res.status(400).json({
-      ok: false,
-      error: "mode must be all or curated"
-    });
-  }
-
-  storeSettings.catalogMode = mode;
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    catalogMode: storeSettings.catalogMode
-  });
-});
-
-app.post("/api/admin/catalog/publish", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  storeSettings.hiddenIds = storeSettings.hiddenIds.filter(id => id !== productId);
-
-  if (!storeSettings.publishedIds.includes(productId)) {
-    storeSettings.publishedIds.push(productId);
-  }
-
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    published: true
-  });
-  }
-
-  storeSettings.hiddenIds = storeSettings.hiddenIds.filter(id => id !== productId);
-
-  if (!storeSettings.publishedIds.includes(productId)) {
-    storeSettings.publishedIds.push(productId);
-  }
-
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    published: true
-  });
-});
-
-app.post("/api/admin/catalog/unpublish", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  storeSettings.publishedIds = storeSettings.publishedIds.filter(id => id !== productId);
-  storeSettings.hiddenIds = Array.from(
-    new Set([...storeSettings.hiddenIds, productId])
-  );
-
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    published: false
-  });
-});
-
-app.post("/api/admin/catalog/discount", requireAdmin, (req, res) => {
-  const productId = String(req.body?.productId || "").trim();
-  const discount = normalizeDiscount(req.body?.discount);
-
-  if (!productId) {
-    return res.status(400).json({
-      ok: false,
-      error: "productId is required"
-    });
-  }
-
-  if (!discount) {
-    return res.status(400).json({
-      ok: false,
-      error: "Invalid discount"
-    });
-  }
-
-  storeSettings.discounts[productId] = discount;
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    discount
-  });
-});
-
-app.delete("/api/admin/catalog/discount/:productId", requireAdmin, (req, res) => {
-  const productId = String(req.params.productId || "").trim();
-
-  delete storeSettings.discounts[productId];
-  void saveStoreSettingsNow();
-
-  res.json({
-    ok: true,
-    productId,
-    discount: null
-  });
-});
-
-// ======================================================
-// لوحة الإدارة — لا تحتاج ملف HTML منفصل
-// ======================================================
-
-app.get("/admin", (req, res) => {
-  res.type("html").send(`<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ABESHA STORE — الإدارة</title>
-<style>
-*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#071426;color:#eef5ff}
-header{padding:18px 16px;background:#0b1f3a;border-bottom:1px solid #1d416e;position:sticky;top:0;z-index:5}
-h1{margin:0 0 6px;font-size:22px}.muted{color:#9fb3cc;font-size:13px}
-.wrap{max-width:1200px;margin:auto;padding:16px}
-.panel{background:#0b1f3a;border:1px solid #1d416e;border-radius:14px;padding:14px;margin-bottom:14px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-input,select,button{font:inherit;border-radius:9px;border:1px solid #31577f;padding:10px}
-input,select{background:#071426;color:#fff;min-width:180px}button{background:#123866;color:#fff;cursor:pointer}
-button.primary{background:#1769aa}button.danger{background:#7d2633}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.stat{background:#071426;border-radius:10px;padding:12px}.num{font-size:22px;font-weight:bold;margin-top:5px}
-#products{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-.card{background:#0b1f3a;border:1px solid #1d416e;border-radius:12px;padding:13px}
-.card h3{font-size:15px;margin:0 0 8px;line-height:1.4}.price{font-size:19px;font-weight:bold}
-.badge{display:inline-block;padding:4px 7px;border-radius:7px;background:#123866;color:#cfe6ff;font-size:11px;margin:2px}
-.actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}
-.small{font-size:12px;color:#a9bdd3}.discount{color:#ffd36b}
-.hidden{display:none}
-</style>
-</head>
-<body>
-<header>
-  <div class="wrap" style="padding:0">
-    <h1>ABESHA STORE — لوحة الإدارة</h1>
-    <div class="muted">إدارة المنتجات، النشر، الأسعار والعروض</div>
-  </div>
-</header>
-<main class="wrap">
-  <section class="panel">
-    <div class="row">
-      <input id="key" type="password" placeholder="ADMIN_KEY">
-      <button class="primary" onclick="loadAll()">دخول وتحميل الكتالوج</button>
-      <select id="mode" onchange="changeMode()">
-        <option value="all">عرض كل المنتجات الحالية</option>
-        <option value="curated">عرض المنتجات التي أختارها فقط</option>
-      </select>
-    </div>
-    <div id="msg" class="muted" style="margin-top:9px"></div>
-  </section>
-
-  <section class="panel">
-    <div class="stats">
-      <div class="stat">إجمالي الكتالوج<div class="num" id="total">—</div></div>
-      <div class="stat">المنشور<div class="num" id="published">—</div></div>
-      <div class="stat">المخفي<div class="num" id="hidden">—</div></div>
-      <div class="stat">عروض نشطة<div class="num" id="discounts">—</div></div>
-    </div>
-  </section>
-
-  <section class="panel">
-    <div class="row">
-      <input id="search" placeholder="ابحث باسم المنتج..." oninput="render()">
-      <select id="type" onchange="render()">
-        <option value="">كل الأقسام</option>
-        <option value="topup">Topups</option>
-        <option value="gift_card">Gift Cards</option>
-        <option value="game_key">Game Keys</option>
-        <option value="steam">Steam</option>
-        <option value="subscription">Subscriptions</option>
-      </select>
-      <select id="publishedFilter" onchange="render()">
-        <option value="">الكل</option>
-        <option value="published">منشور</option>
-        <option value="hidden">مخفي</option>
-      </select>
-    </div>
-  </section>
-
-  <section id="products"></section>
-</main>
-
-<script>
-let catalog = [];
-let settings = null;
-
-function headers() {
-  return {
-    "Content-Type": "application/json",
-    "x-admin-key": document.getElementById("key").value.trim()
-  };
-}
-
-function msg(text, error = false) {
-  const el = document.getElementById("msg");
-  el.textContent = text || "";
-  el.style.color = error ? "#ff9d9d" : "";
-}
-
-async function api(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...headers(),
-      ...(options.headers || {})
-    }
-  });
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(data.error || "Request failed");
-  }
-
-  return data;
-}
-
-async function loadAll() {
-  try {
-    msg("جاري تحميل الكتالوج...");
-    const data = await api("/api/admin/catalog");
-    catalog = Array.isArray(data.products) ? data.products : [];
-    settings = data.settings || {};
-    document.getElementById("mode").value = settings.catalogMode || "all";
-    updateStats();
-    render();
-    msg("تم تحميل الكتالوج بنجاح");
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-function updateStats() {
-  const published = catalog.filter(x => x.published).length;
-  const hidden = catalog.filter(x => !x.published).length;
-  const discounts = catalog.filter(x => x.discount && x.discount.active !== false).length;
-
-  document.getElementById("total").textContent = catalog.length;
-  document.getElementById("published").textContent = published;
-  document.getElementById("hidden").textContent = hidden;
-  document.getElementById("discounts").textContent = discounts;
-}
-
-function esc(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function money(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n.toLocaleString("en-US") + " SDG" : "—";
-}
-
-function render() {
-  const root = document.getElementById("products");
-  const q = document.getElementById("search").value.trim().toLowerCase();
-  const type = document.getElementById("type").value;
-  const publishedFilter = document.getElementById("publishedFilter").value;
-
-  const filtered = catalog.filter(product => {
-    if (q && !String(product.name || "").toLowerCase().includes(q)) return false;
-    if (type && product.type !== type && product.store_category !== type) return false;
-    if (publishedFilter === "published" && !product.published) return false;
-    if (publishedFilter === "hidden" && product.published) return false;
-    return true;
-  });
-
-  root.innerHTML = filtered.map(product => {
-    const discount = product.discount;
-    const hasDiscount = discount && discount.active !== false;
-
-    return `
-      <article class="card">
-        <h3>${esc(product.name)}</h3>
-        <div>
-          <span class="badge">${esc(product.type || "")}</span>
-          <span class="badge">${esc(product.store_category || "")}</span>
-          ${
-            product.published
-              ? '<span class="badge">منشور</span>'
-              : '<span class="badge">مخفي</span>'
-          }
-        </div>
-
-        <div style="margin-top:10px">
-          <div class="price">${money(product.price_sdg)}</div>
-          ${
-            hasDiscount
-              ? `<div class="small discount">عرض: ${esc(discount.label || "عرض خاص")}</div>`
-              : ""
-          }
-        </div>
-
-        <div class="small" style="margin-top:7px">
-          ID: ${esc(product.id)}
-        </div>
-
-        <div class="actions">
-          ${
-            product.published
-              ? `<button class="danger" onclick="unpublish('${encodeURIComponent(product.id)}')">إخفاء</button>`
-              : `<button class="primary" onclick="publish('${encodeURIComponent(product.id)}')">نشر</button>`
-          }
-          <button onclick="setDiscount('${encodeURIComponent(product.id)}')">خصم</button>
-          ${
-            hasDiscount
-              ? `<button onclick="removeDiscount('${encodeURIComponent(product.id)}')">إلغاء الخصم</button>`
-              : ""
-          }
-        </div>
-      </article>
-    `;
-  }).join("");
-
-  if (!filtered.length) {
-    root.innerHTML = '<section class="panel"><div class="muted">لا توجد نتائج</div></section>';
-  }
-}
-
-async function publish(id) {
-  try {
-    await api("/api/admin/catalog/publish", {
-      method: "POST",
-      body: JSON.stringify({ productId: decodeURIComponent(id) })
-    });
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function unpublish(id) {
-  try {
-    await api("/api/admin/catalog/unpublish", {
-      method: "POST",
-      body: JSON.stringify({ productId: decodeURIComponent(id) })
-    });
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function setDiscount(id) {
-  const productId = decodeURIComponent(id);
-  const type = prompt("نوع الخصم: percent أو fixed", "percent");
-  if (!type) return;
-
-  const value = prompt(
-    type === "fixed"
-      ? "قيمة الخصم بالجنيه السوداني"
-      : "نسبة الخصم",
-    "5"
-  );
-
-  if (!value) return;
-
-  const label = prompt("اسم العرض", "عرض خاص") || "عرض خاص";
-
-  try {
-    await api("/api/admin/catalog/discount", {
-      method: "POST",
-      body: JSON.stringify({
-        productId,
-        discount: {
-          type,
-          value: Number(value),
-          label,
-          active: true
-        }
-      })
-    });
-
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function removeDiscount(id) {
-  try {
-    await api(
-      "/api/admin/catalog/discount/" + encodeURIComponent(decodeURIComponent(id)),
-      { method: "DELETE" }
-    );
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-
-async function changeMode() {
-  const mode = document.getElementById("mode").value;
-
-  try {
-    await api("/api/admin/catalog/mode", {
-      method: "POST",
-      body: JSON.stringify({ mode })
-    });
-    await loadAll();
-  } catch (error) {
-    msg(error.message, true);
-  }
-}
-</script>
-</body>
-</html>`);
-});
-
-// ======================================================
-// Customer Authentication
-// ======================================================
-
-app.get("/api/auth/me", async (req, res) => {
-  try {
-    const customer = await getCurrentCustomer(req);
-    if (!customer) {
-      return res.json({
-        ok: true,
-        authenticated: false,
-        customer: null
-      });
-    }
-
-    res.json({
-      ok: true,
-      authenticated: true,
-      customer
-    });
-  } catch (error) {
-    res.status(503).json({
-      ok: false,
-      error: "Authentication service unavailable"
-    });
-  }
-});
-
-app.post("/api/auth/register", async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    if (authRateLimited(req)) {
-      return res.status(429).json({
-        ok: false,
-        error: "Too many attempts. Please try again later."
-      });
-    }
-
-    const name = cleanName(req.body?.name);
-    const phone = normalizePhone(req.body?.phone);
-    const password = String(req.body?.password || "");
-
-    if (name.length < 2) {
+    if (!allowed.includes(status)) {
       return res.status(400).json({
         ok: false,
-        error: "Please enter a valid name"
-      });
-    }
-
-    if (phone.length < 8) {
-      return res.status(400).json({
-        ok: false,
-        error: "Please enter a valid phone number"
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        ok: false,
-        error: "Password must be at least 6 characters"
-      });
-    }
-
-    const existing = await dbPool.query(
-      "SELECT id FROM customers WHERE phone = $1 LIMIT 1",
-      [phone]
-    );
-
-    if (existing.rows[0]) {
-      return res.status(409).json({
-        ok: false,
-        error: "This phone number is already registered"
-      });
-    }
-
-    const passwordData = await hashPassword(password);
-
-    const result = await dbPool.query(`
-      INSERT INTO customers (
-        name,
-        phone,
-        password_hash,
-        password_salt
-      )
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, name, phone
-    `, [
-      name,
-      phone,
-      passwordData.hash,
-      passwordData.salt
-    ]);
-
-    const customer = result.rows[0];
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = hashSessionToken(token);
-
-    await dbPool.query(`
-      INSERT INTO sessions (
-        customer_id,
-        token_hash,
-        expires_at
-      )
-      VALUES ($1, $2, NOW() + INTERVAL '30 days')
-    `, [customer.id, tokenHash]);
-
-    setSessionCookie(res, token);
-
-    res.status(201).json({
-      ok: true,
-      authenticated: true,
-      customer
-    });
-  } catch (error) {
-    console.error("[AUTH] Registration failed:", error.message);
-    res.status(500).json({
-      ok: false,
-      error: "Could not create account"
-    });
-  }
-});
-
-app.post("/api/auth/login", async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    if (authRateLimited(req)) {
-      return res.status(429).json({
-        ok: false,
-        error: "Too many attempts. Please try again later."
-      });
-    }
-
-    const phone = normalizePhone(req.body?.phone);
-    const password = String(req.body?.password || "");
-
-    if (phone.length < 8 || !password) {
-      return res.status(400).json({
-        ok: false,
-        error: "Phone and password are required"
-      });
-    }
-
-    const result = await dbPool.query(`
-      SELECT id, name, phone, password_hash, password_salt
-      FROM customers
-      WHERE phone = $1
-      LIMIT 1
-    `, [phone]);
-
-    const customer = result.rows[0];
-
-    if (!customer) {
-      return res.status(401).json({
-        ok: false,
-        error: "Invalid phone or password"
-      });
-    }
-
-    const valid = await verifyPassword(
-      password,
-      customer.password_hash,
-      customer.password_salt
-    );
-
-    if (!valid) {
-      return res.status(401).json({
-        ok: false,
-        error: "Invalid phone or password"
-      });
-    }
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const tokenHash = hashSessionToken(token);
-
-    await dbPool.query(`
-      INSERT INTO sessions (
-        customer_id,
-        token_hash,
-        expires_at
-      )
-      VALUES ($1, $2, NOW() + INTERVAL '30 days')
-    `, [customer.id, tokenHash]);
-
-    setSessionCookie(res, token);
-
-    res.json({
-      ok: true,
-      authenticated: true,
-      customer: {
-        id: customer.id,
-        name: customer.name,
-        phone: customer.phone
-      }
-    });
-  } catch (error) {
-    console.error("[AUTH] Login failed:", error.message);
-    res.status(500).json({
-      ok: false,
-      error: "Could not login"
-    });
-  }
-});
-
-app.post("/api/auth/logout", async (req, res) => {
-  try {
-    const token = parseCookies(req)[SESSION_COOKIE];
-
-    if (dbPool && token) {
-      await dbPool.query(
-        "DELETE FROM sessions WHERE token_hash = $1",
-        [hashSessionToken(token)]
-      );
-    }
-
-    clearSessionCookie(res);
-
-    res.json({
-      ok: true,
-      authenticated: false
-    });
-  } catch (error) {
-    clearSessionCookie(res);
-    res.json({
-      ok: true,
-      authenticated: false
-    });
-  }
-});
-
-// ======================================================
-// Customer Orders
-// ======================================================
-
-function makeOrderNumber() {
-  const now = new Date();
-  const stamp = now
-    .toISOString()
-    .replace(/\D/g, "")
-    .slice(0, 14);
-
-  const random = crypto
-    .randomBytes(3)
-    .toString("hex")
-    .toUpperCase();
-
-  return `ABS-${stamp}-${random}`;
-}
-
-function normalizeOrderItems(items) {
-  if (!Array.isArray(items)) return [];
-
-  return items
-    .map(item => {
-      const quantity = Math.max(
-        1,
-        Math.min(100, Number.parseInt(item?.quantity, 10) || 1)
-      );
-
-      return {
-        productId: String(item?.productId || item?.id || "").slice(0, 200),
-        productName: String(item?.productName || item?.name || "").trim().slice(0, 500),
-        quantity,
-        fields: item?.fields && typeof item.fields === "object"
-          ? item.fields
-          : {}
-      };
-    })
-    .filter(item => item.productId && item.productName);
-}
-
-async function buildOrderFromCatalog(customer, rawItems, paymentMethod) {
-  const products = await getPricedCatalog();
-  const productMap = new Map(
-    products
-      .filter(productVisibility)
-      .filter(product => Number(product.price_sdg) > 0)
-      .map(product => [String(product.id), product])
-  );
-
-  const items = normalizeOrderItems(rawItems);
-
-  if (!items.length) {
-    const error = new Error("Order must contain at least one product");
-    error.status = 400;
-    throw error;
-  }
-
-  const normalized = [];
-
-  for (const item of items) {
-    const product = productMap.get(item.productId);
-
-    if (!product) {
-      const error = new Error(`Product unavailable: ${item.productId}`);
-      error.status = 400;
-      throw error;
-    }
-
-    const enriched = enrichProductForStore(product);
-    const unitPrice = Number(enriched.price_sdg);
-
-    if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
-      const error = new Error(`Product has no valid price: ${item.productName}`);
-      error.status = 400;
-      throw error;
-    }
-
-    normalized.push({
-      productId: String(product.id),
-      productName: String(enriched.name || item.productName),
-      quantity: item.quantity,
-      unitPrice,
-      fields: item.fields || {}
-    });
-  }
-
-  const total = normalized.reduce(
-    (sum, item) => sum + item.unitPrice * item.quantity,
-    0
-  );
-
-  return {
-    paymentMethod: String(paymentMethod || "bankak").trim().toLowerCase(),
-    items: normalized,
-    total
-  };
-}
-
-app.post("/api/orders", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  const client = await dbPool.connect();
-
-  try {
-    const { paymentMethod, items } = await buildOrderFromCatalog(
-      req.customer,
-      req.body?.items,
-      req.body?.paymentMethod
-    );
-
-    const allowedPayments = ["bankak", "mycashi"];
-
-    if (!allowedPayments.includes(paymentMethod)) {
-      return res.status(400).json({
-        ok: false,
-        error: "Invalid payment method"
-      });
-    }
-
-    const orderNumber = makeOrderNumber();
-
-    await client.query("BEGIN");
-
-    const orderResult = await client.query(`
-      INSERT INTO orders (
-        order_number,
-        customer_id,
-        customer_name,
-        customer_phone,
-        status,
-        payment_method,
-        payment_status,
-        total_sdg
-      )
-      VALUES (
-        $1,
-        $2,
-        $3,
-        $4,
-        'PENDING_PAYMENT',
-        $5,
-        'PENDING',
-        $6
-      )
-      RETURNING id, order_number, status, payment_method, payment_status, total_sdg, created_at
-    `, [
-      orderNumber,
-      req.customer.id,
-      req.customer.name,
-      req.customer.phone,
-      paymentMethod,
-      total
-    ]);
-
-    const order = orderResult.rows[0];
-
-    for (const item of items) {
-      await client.query(`
-        INSERT INTO order_items (
-          order_id,
-          product_id,
-          product_name,
-          quantity,
-          unit_price_sdg,
-          fields_json
-        )
-        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-      `, [
-        order.id,
-        item.productId,
-        item.productName,
-        item.quantity,
-        item.unitPrice,
-        JSON.stringify(item.fields || {})
-      ]);
-    }
-
-    await client.query("COMMIT");
-
-    res.status(201).json({
-      ok: true,
-      order: {
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items
-      }
-    });
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => {});
-    console.error("[ORDERS] Create order failed:", error.message);
-    res.status(error.status || 500).json({
-      ok: false,
-      error: error.message || "Could not create order"
-    });
-  } finally {
-    client.release();
-  }
-});
-
-app.get("/api/customer/orders", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const result = await dbPool.query(`
-      SELECT
-        o.id,
-        o.order_number,
-        o.status,
-        o.payment_method,
-        o.payment_status,
-        o.total_sdg,
-        o.created_at,
-        o.updated_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'productId', oi.product_id,
-              'productName', oi.product_name,
-              'quantity', oi.quantity,
-              'unitPrice', oi.unit_price_sdg,
-              'fields', oi.fields_json
-            )
-            ORDER BY oi.id
-          ) FILTER (WHERE oi.id IS NOT NULL),
-          '[]'::json
-        ) AS items
-      FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.customer_id = $1
-      GROUP BY o.id
-      ORDER BY o.created_at DESC
-      LIMIT 100
-    `, [req.customer.id]);
-
-    res.json({
-      ok: true,
-      orders: result.rows.map(order => ({
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: Array.isArray(order.items) ? order.items.map(item => ({
-          ...item,
-          unitPrice: Number(item.unitPrice)
-        })) : []
-      }))
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not load orders"
-    });
-  }
-});
-
-app.get("/api/orders/:orderNumber", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderResult = await dbPool.query(`
-      SELECT
-        id,
-        order_number,
-        status,
-        payment_method,
-        payment_status,
-        payment_reference,
-        total_sdg,
-        created_at,
-        updated_at
-      FROM orders
-      WHERE order_number = $1
-        AND customer_id = $2
-      LIMIT 1
-    `, [
-      String(req.params.orderNumber),
-      req.customer.id
-    ]);
-
-    const order = orderResult.rows[0];
-
-    if (!order) {
-      return res.status(404).json({
-        ok: false,
-        error: "Order not found"
-      });
-    }
-
-    const itemsResult = await dbPool.query(`
-      SELECT
-        product_id,
-        product_name,
-        quantity,
-        unit_price_sdg,
-        fields_json
-      FROM order_items
-      WHERE order_id = $1
-      ORDER BY id
-    `, [order.id]);
-
-    res.json({
-      ok: true,
-      order: {
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: itemsResult.rows.map(item => ({
-          productId: item.product_id,
-          productName: item.product_name,
-          quantity: item.quantity,
-          unitPrice: Number(item.unit_price_sdg),
-          fields: item.fields_json || {}
-        }))
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not load order"
-    });
-  }
-});
-
-app.post("/api/customer/reorder", requireCustomer, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderNumber = String(req.body?.orderNumber || "").trim();
-
-    if (!orderNumber) {
-      return res.status(400).json({
-        ok: false,
-        error: "orderNumber is required"
-      });
-    }
-
-    const result = await dbPool.query(`
-      SELECT
-        oi.product_id,
-        oi.product_name,
-        oi.quantity,
-        oi.fields_json
-      FROM orders o
-      JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.order_number = $1
-        AND o.customer_id = $2
-      ORDER BY oi.id
-    `, [orderNumber, req.customer.id]);
-
-    if (!result.rows.length) {
-      return res.status(404).json({
-        ok: false,
-        error: "Order not found"
-      });
-    }
-
-    const products = await getPricedCatalog();
-    const productMap = new Map(
-      products
-        .filter(productVisibility)
-        .filter(product => Number(product.price_sdg) > 0)
-        .map(product => [String(product.id), product])
-    );
-
-    const items = [];
-
-    for (const row of result.rows) {
-      const product = productMap.get(String(row.product_id));
-      if (!product) continue;
-
-      items.push({
-        productId: String(product.id),
-        productName: String(product.name || row.product_name),
-        quantity: Math.max(1, Number(row.quantity) || 1),
-        fields: row.fields_json || {}
-      });
-    }
-
-    res.json({
-      ok: true,
-      items
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not prepare reorder"
-    });
-  }
-});
-
-// ======================================================
-// Admin Orders
-// ======================================================
-
-app.get("/api/admin/orders", requireAdmin, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const status = String(req.query.status || "").trim();
-
-    const params = [];
-    let where = "";
-
-    if (status) {
-      params.push(status);
-      where = `WHERE o.status = $${params.length}`;
-    }
-
-    const result = await dbPool.query(`
-      SELECT
-        o.id,
-        o.order_number,
-        o.customer_name,
-        o.customer_phone,
-        o.status,
-        o.payment_method,
-        o.payment_status,
-        o.payment_reference,
-        o.total_sdg,
-        o.created_at,
-        o.updated_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'productId', oi.product_id,
-              'productName', oi.product_name,
-              'quantity', oi.quantity,
-              'unitPrice', oi.unit_price_sdg,
-              'fields', oi.fields_json
-            )
-            ORDER BY oi.id
-          ) FILTER (WHERE oi.id IS NOT NULL),
-          '[]'::json
-        ) AS items
-      FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.id
-      ${where}
-      GROUP BY o.id
-      ORDER BY o.created_at DESC
-      LIMIT 500
-    `, params);
-
-    res.json({
-      ok: true,
-      orders: result.rows.map(order => ({
-        ...order,
-        total_sdg: Number(order.total_sdg),
-        items: Array.isArray(order.items) ? order.items.map(item => ({
-          ...item,
-          unitPrice: Number(item.unitPrice)
-        })) : []
-      }))
-    });
-  } catch (error) {
-    res.status(500).json({
-      ok: false,
-      error: "Could not load admin orders"
-    });
-  }
-});
-
-app.post("/api/admin/orders/:orderNumber/confirm-payment", requireAdmin, async (req, res) => {
-  if (!requireDatabase(res)) return;
-
-  try {
-    const orderNumber = String(req.params.orderNumber || "").trim();
-    const paymentReference = String(
-      req.body?.paymentReference ||
-      req.body?.reference ||
-      ""
-    ).trim().slice(0, 120);
-
-    if (!orderNumber) {
-      return res.status(400).json({
-        ok: false,
-        error: "orderNumber is required"
+        error: "حالة الطلب غير صالحة."
       });
     }
 
     const result = await dbPool.query(`
       UPDATE orders
-      SET
-        status = 'PAID',
-        payment_status = 'CONFIRMED',
-        payment_reference = $1,
-        updated_at = NOW()
-      WHERE order_number = $2
-      RETURNING
-        id,
-        order_number,
-        customer_id,
-        customer_name,
-        customer_phone,
-        status,
-        payment_method,
-        payment_status,
-        payment_reference,
-        total_sdg,
-        created_at,
-        updated_at
-    `, [paymentReference || null, orderNumber]);
+      SET status = $2,
+          payment_status = CASE
+            WHEN $2 = 'PAID' THEN 'PAID'
+            WHEN $2 = 'PAYMENT_PENDING' THEN 'PENDING'
+            WHEN $2 IN ('CANCELLED', 'FAILED') THEN 'FAILED'
+            ELSE payment_status
+          END,
+          updated_at = NOW()
+      WHERE order_number = $1
+      RETURNING id, order_number, status, payment_method, payment_status, payment_reference, total_sdg, created_at, updated_at
+    `, [orderNumber, status]);
 
-    const order = result.rows[0];
-
-    if (!order) {
+    if (!result.rowCount) {
       return res.status(404).json({
         ok: false,
         error: "Order not found"
       });
     }
 
+    const order = result.rows[0];
+
     res.json({
       ok: true,
       order: {
-        ...order,
-        total_sdg: Number(order.total_sdg)
+        orderNumber: order.order_number,
+        status: order.status,
+        paymentMethod: order.payment_method,
+        paymentStatus: order.payment_status,
+        paymentReference: order.payment_reference,
+        total: Number(order.total_sdg),
+        createdAt: order.created_at,
+        updatedAt: order.updated_at
       }
     });
   } catch (error) {
+    console.error("[ADMIN ORDER STATUS]", error);
     res.status(500).json({
       ok: false,
-      error: "Could not confirm payment"
+      error: "تعذر تحديث حالة الطلب."
     });
   }
 });
 
 // ======================================================
-// Root
-// ======================================================
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-// ======================================================
-// بدء التشغيل
+// بدء الخادم
 // ======================================================
 
 async function startServer() {
   try {
-    await initDatabase();
-
-    // Database is the primary persistent source when available.
-    // Disk files remain as a fallback for local/development deployments.
-    await loadStoreSettingsFromDatabase();
-
-    const loadedFromDb = await loadPriceCacheFromDatabase();
-
-    if (!loadedFromDb) {
-      loadPriceCacheFromDisk();
-    }
-
-    if (!cacheIsAvailable()) {
-      console.log("[PRICE CACHE] No local/database catalog cache found.");
-      console.log("[PRICE CACHE] Building catalog from Fazer once at startup...");
-
-      try {
-        await buildPricedCatalog();
-      } catch (error) {
-        console.error("[PRICE CACHE] Initial catalog build failed:", error.message);
-      }
-    } else {
-      console.log(
-        `[PRICE CACHE] Using cached catalog with ${pricedCatalogCache.length} products`
-      );
-    }
+    await initializeDatabase();
 
     app.listen(PORT, () => {
       console.log(`ABESHA STORE running on port ${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
       console.log(`Pricing USD/SDG: ${getPricingConfig().usdToSdg}`);
-      console.log(`Catalog cache: ${pricedCatalogCache?.length || 0} products`);
-      console.log(`Database: ${dbPool ? "enabled" : "disabled"}`);
+      console.log(`Price cache available: ${cacheIsAvailable()}`);
+      console.log(`Database configured: ${Boolean(process.env.DATABASE_URL)}`);
     });
   } catch (error) {
-    console.error("[STARTUP] Fatal error:", error);
+    console.error("[SERVER START ERROR]", error);
     process.exit(1);
   }
 }
