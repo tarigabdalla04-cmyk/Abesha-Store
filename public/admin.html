@@ -99,89 +99,82 @@
 </div>
 
 <script>
-
 let products = [];
 
 async function loadCatalog() {
+  const keyInput = document.getElementById("adminKey").value.trim();
 
-  const key = document.getElementById("adminKey").value.trim();
-
-  if (!key) {
+  if (!keyInput) {
     alert("أدخل مفتاح الإدارة");
     return;
   }
 
-  sessionStorage.setItem("ABESHA_ADMIN_KEY", key);
-
-  document.getElementById("status").textContent =
-    "جاري تحميل الكتالوج...";
+  document.getElementById("status").textContent = "جاري التحقق وتراسل السيرفر...";
 
   try {
-
-    const response = await fetch("/api/admin/catalog", {
-      headers: {
-        "X-Admin-Key": key
-      }
+    // 1. تسجيل الدخول الآمن أولاً عبر JSON API
+    const loginRes = await fetch("/api/admin/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ adminKey: keyInput })
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.error || "فشل الدخول");
+    const contentType = loginRes.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      throw new Error("استجابة الخادم غير صالحة. تأكد من إعداد السيرفر بشكل صحيح.");
     }
 
-    products = data.products || [];
+    const loginData = await loginRes.json();
+
+    if (!loginRes.ok || !loginData.ok) {
+      throw new Error(loginData.error || "مفتاح الإدارة غير صحيح");
+    }
+
+    sessionStorage.setItem("ABESHA_ADMIN_KEY", keyInput);
+
+    // 2. جلب المنتجات المتاحة بعد نجاح تسجيل الدخول
+    document.getElementById("status").textContent = "جاري تحميل الكتالوج والأسعار...";
+
+    const prodRes = await fetch("/api/products");
+    const prodData = await prodRes.json();
+
+    if (!prodRes.ok || !prodData.ok) {
+      throw new Error(prodData.error || "فشل جلب المنتجات");
+    }
+
+    products = prodData.products || [];
 
     document.getElementById("loginBox").style.display = "none";
-
     document.getElementById("search").style.display = "block";
-
-    document.getElementById("status").textContent =
-      "تم تحميل " + products.length + " منتج";
+    document.getElementById("status").textContent = "تم تحميل " + products.length + " منتج بنجاح.";
 
     renderProducts();
 
   } catch (error) {
-
     sessionStorage.removeItem("ABESHA_ADMIN_KEY");
-
-    document.getElementById("status").textContent =
-      "فشل الدخول: " + error.message;
+    document.getElementById("status").textContent = "فشل الدخول: " + error.message;
   }
 }
 
 function renderProducts() {
-
-  const search =
-    document.getElementById("search").value
-      .trim()
-      .toLowerCase();
+  const search = document.getElementById("search").value.trim().toLowerCase();
 
   const filtered = products.filter(product => {
-
     const name = (product.name || "").toLowerCase();
-
     const id = (product.id || "").toLowerCase();
-
     return name.includes(search) || id.includes(search);
   });
 
-  document.getElementById("products").innerHTML =
-  filtered.slice(0, 100).map(product => `
+  document.getElementById("products").innerHTML = filtered.slice(0, 100).map(product => `
     <div class="product">
-
       <strong>${escapeHtml(product.name || "")}</strong>
-
-      <div class="type">
-        النوع: ${escapeHtml(product.type || "")}
+      <div class="type">النوع: ${escapeHtml(product.type || "topup")}</div>
+      <div>ID: ${escapeHtml(product.id || "")}</div>
+      <div style="margin-top: 8px; font-weight: bold; color: #4CAF50;">
+        السعر النهائي: ${product.price_sdg ? Number(product.price_sdg).toLocaleString("en-US") + " SDG" : "غير متوفر"}
       </div>
-
-      <div>
-        ID: ${escapeHtml(product.id || "")}
-      </div>
-
       <button
-        onclick="openProductOffers('${escapeHtml(product.id || "")}', '${escapeHtml(product.type || "")}', '${escapeHtml(product.name || "")}')"
+        onclick="showProductDetails('${escapeHtml(product.id || "")}')"
         style="
           margin-top:12px;
           padding:10px 16px;
@@ -192,185 +185,35 @@ function renderProducts() {
           cursor:pointer;
         "
       >
-        إدارة العروض
+        تفاصيل المنتج
       </button>
-
     </div>
   `).join("");
 
   if (!filtered.length) {
-    document.getElementById("products").innerHTML =
-      "<p>لا توجد نتائج.</p>";
+    document.getElementById("products").innerHTML = "<p>لا توجد نتائج.</p>";
   }
 }
 
-function escapeHtml(value) {
+function showProductDetails(productId) {
+  const product = products.find(p => p.id === productId);
+  if (!product) return;
 
+  let details = "📦 تفاصيل المنتج:\n\n";
+  details += "اسم المنتج: " + product.name + "\n";
+  details += "الرقم التعريفي (ID): " + product.id + "\n";
+  details += "السعر المحسوب: " + (product.price_sdg ? product.price_sdg.toLocaleString("en-US") + " SDG" : "غير محدد") + "\n";
+
+  alert(details);
+}
+
+function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-async function openProductOffers(productId, productType, productName) {
-  try {
-    const name = productName || productId;
-
-    document.getElementById("status").innerText =
-      "جاري تحميل عروض " + name + "...";
-
-    let url = "";
-
-    if (
-      String(productType || "").toLowerCase().includes("gift")
-    ) {
-      url =
-        "/api/fazer/giftcards/cards?category_id=" +
-        encodeURIComponent(productId);
-    } else {
-      url =
-        "/api/fazer/topups/offers?category_id=" +
-        encodeURIComponent(productId);
-    }
-
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (!response.ok || data.ok === false) {
-      throw new Error(
-        data.error || data.message || "تعذر تحميل العروض"
-      );
-    }
-
-    const offers =
-      data.offers ||
-      data.cards ||
-      data.items ||
-      [];
-
-    if (!offers.length) {
-      alert(
-        "المنتج: " +
-        name +
-        "\n\nلم يتم العثور على عروض متاحة حاليًا."
-      );
-
-      document.getElementById("status").innerText = "";
-      return;
-    }
-
-    const settingsResponse = await fetch("/api/catalog/published");
-const settingsData = await settingsResponse.json();
-
-const pricing = settingsData.pricing || {};
-
-const USD_TO_SDG = Number(pricing.usdToSdg) || 8300;
-    const REFERENCE_USD_TO_SDG = Number(pricing.referenceUsdToSdg) || 8275;
-const MARKUP = Number(pricing.markup) || 0.10;
-
-    let message =
-      "📦 " + name + "\n\n" +
-      "سعر الصرف: 1 USD = " +
-      USD_TO_SDG.toLocaleString("en-US") +
-      " SDG\n" +
-      "الزيادة: 10%\n\n" +
-      "العروض:\n\n";
-
-    offers.forEach((offer, index) => {
-      const usd = Number(
-        offer.price_usd || offer.price || 0
-      );
-
-      
-
-const cost = usd * USD_TO_SDG;
-
-let sale = null;
-
-// استخدام السعر النهائي المحدد للمنتج إذا كان موجوداً
-if (productType === "topup" && pricing.finalPrices) {
-  const productPrices = pricing.finalPrices[productId];
-
-  if (productPrices) {
-    const offerText = String(
-      offer.name ||
-      offer.title ||
-      offer.label ||
-      offer.description ||
-      ""
-    ).toLowerCase();
-
-    const priceKeys = Object.keys(productPrices);
-
-    const matchedKey = priceKeys
-  .sort((a, b) => {
-    const aNum = Number(a.replace("_uc", ""));
-    const bNum = Number(b.replace("_uc", ""));
-    return bNum - aNum;
-  })
-  .find(key => {
-    const quantity = key.replace("_uc", "");
-    const pattern = new RegExp(`\\b${quantity}\\b`);
-    return pattern.test(offerText);
-  });
-
-    if (matchedKey) {
-      sale = Number(productPrices[matchedKey]);
-    }
-  }
-}
-
-// إذا لم يوجد سعر نهائي محدد، استخدم التسعير التلقائي
-if (!sale) {
-  const referenceSale =
-    usd * REFERENCE_USD_TO_SDG * (1 + MARKUP);
-
-  const minimumSale =
-    cost * 1.05;
-
-  sale = Math.max(referenceSale, minimumSale);
-}
-
-const profit = sale - cost;
-
-      message +=
-        (index + 1) + ". " +
-        (offer.name || offer.title || offer.id || "عرض") +
-        "\n" +
-        "سعر الدولار الامريكي: $" +
-        usd.toFixed(4) +
-        "\n" +
-        "التكلفة: " +
-        Math.round(cost).toLocaleString("en-US") +
-        " SDG\n" +
-        "البيع المقترح: " +
-        Math.round(sale).toLocaleString("en-US") +
-        " SDG\n" +
-        "الربح: " +
-        Math.round(profit).toLocaleString("en-US") +
-        " SDG\n\n";
-    });
-
-    alert(message);
-
-    document.getElementById("status").innerText =
-      "تم تحميل " +
-      offers.length +
-      " عرضًا لـ " +
-      name;
-
-  } catch (error) {
-    console.error(error);
-
-    alert(
-      "حدث خطأ أثناء تحميل العروض:\n\n" +
-      error.message
-    );
-
-    document.getElementById("status").innerText =
-      "تعذر تحميل العروض";
-  }
 }
 </script>
 
