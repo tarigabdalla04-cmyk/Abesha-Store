@@ -3,8 +3,13 @@
 <head>  
 <meta charset="UTF-8">  
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">  
-<meta name="theme-color" content="#050d1d">  
-<title>ABESHA STORE</title>  
+<meta name="theme-color" content="#f5f8fd">
+<meta name="description" content="اكتشف بطاقات الألعاب والشحن والمنتجات الرقمية في متجر ABESHA. أسعار واضحة وطلب سهل بالعربية والإنجليزية.">
+<meta property="og:title" content="ABESHA STORE — عالمك الرقمي">
+<meta property="og:description" content="اكتشف بطاقات الألعاب والشحن والمنتجات الرقمية بأسعار واضحة وطلب سهل.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://abesha-store-production.up.railway.app/">
+<title>ABESHA STORE — عالمك الرقمي</title>
 <style>  
 :root{--bg:#050d1d;--panel:#091a33;--panel2:#0c2342;--line:#173a64;--text:#f5f8fc;--muted:#91a7c2;--blue:#0b63ce;--blue2:#084fa8;--white:#fff;--success:#48d39a;--danger:#ff6b78;--shadow:0 16px 45px rgba(0,0,0,.28)}  
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 50% -10%,#10345d 0,#07152b 34%,var(--bg) 70%);color:var(--text);font-family:Arial,Tahoma,sans-serif}  
@@ -36,18 +41,92 @@ footer{padding:35px 0 50px;text-align:center;color:#6f89a6;font-size:12px}.toast
 @media(min-width:700px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.hero{padding-top:55px}}@media(min-width:1000px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:480px){.header-inner{height:62px}.brand{font-size:18px}.hero-card{padding:20px}.grid{gap:10px}.card{padding:12px}.product-name{font-size:14px}}  
   
 .auth-tabs{display:flex;gap:8px;margin:0 0 16px}.auth-tab{flex:1;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:inherit;padding:10px;border-radius:10px;font-weight:800}.auth-tab.active{background:rgba(77,137,255,.22);border-color:rgba(100,160,255,.5)}.auth-help{font-size:13px;opacity:.78;line-height:1.7;margin-bottom:14px}.account-bar{display:flex;gap:8px;align-items:center;margin:10px 0;flex-wrap:wrap}.account-chip{font-size:13px;padding:7px 10px;border-radius:999px;background:rgba(255,255,255,.06)}.account-btn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:inherit;padding:8px 11px;border-radius:10px;font-weight:800}  
+
+/* ABESHA storefront refresh */
+:root{--bg:#f7f7fb;--panel:#fff;--panel2:#f0eff8;--line:#e7e5ef;--text:#17152b;--muted:#77758b;--blue:#6750df;--blue2:#4e38c5;--white:#fff;--success:#178a66;--danger:#d64c62;--shadow:0 18px 55px rgba(38,29,75,.1)}
+body{background:var(--bg);color:var(--text);font-family:"Segoe UI",Tahoma,Arial,sans-serif}
+.wrap{width:min(1240px,100%);padding-inline:22px}
+.header{background:rgba(255,255,255,.88);border-bottom:1px solid rgba(231,229,239,.88);box-shadow:0 5px 22px rgba(38,29,75,.035)}
+.header-inner{height:76px}.brand{font-size:21px;letter-spacing:.7px;color:#211b47}.brand span{color:var(--blue)}
+.icon-btn,.lang-btn{border:1px solid var(--line);background:#fff;color:var(--text);border-radius:13px;padding:10px 14px;transition:.2s}
+.icon-btn:hover,.lang-btn:hover,.account-btn:hover{border-color:#c9c1f6;background:#f7f5ff}
+.cart-btn{font-weight:750}.badge{background:#ff795e;color:#fff;left:auto;right:-6px;top:-7px}
+.hero{padding:35px 0 20px}.hero-card{min-height:290px;padding:clamp(26px,5vw,58px);border:0;border-radius:30px;background:radial-gradient(ellipse at 12% 15%,rgba(255,157,121,.27),transparent 31%),radial-gradient(ellipse at 88% 100%,rgba(128,109,255,.4),transparent 35%),linear-gradient(120deg,#221950,#392777 57%,#644ce0);box-shadow:0 24px 60px rgba(53,38,129,.2)}
+.hero-eyebrow{display:inline-flex;align-items:center;gap:7px;color:#f5d5c9;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);padding:7px 11px;border-radius:999px;font-size:12px;font-weight:750;margin-bottom:17px}.hero-cta{display:inline-flex;align-items:center;gap:8px;margin-top:15px;color:#fff;text-decoration:none;font-size:13px;font-weight:800}.hero-cta:hover{text-decoration:underline;text-underline-offset:4px}
+.hero-card:after{width:330px;height:330px;left:-95px;top:auto;bottom:-240px;background:rgba(255,255,255,.09);box-shadow:0 0 0 35px rgba(255,255,255,.035),0 0 0 70px rgba(255,255,255,.025)}
+.hero h1{max-width:700px;font-size:clamp(32px,5.7vw,58px);line-height:1.18;letter-spacing:-1.1px}.hero p{max-width:650px;color:#d9eaff;font-size:clamp(15px,2vw,18px);margin-bottom:25px}
+.search{max-width:620px;border:1px solid rgba(255,255,255,.42);background:#fff;color:#25213a;border-radius:14px;padding:16px 18px;box-shadow:0 10px 28px rgba(22,14,65,.13)}.search::placeholder{color:#89869b}.search:focus{border-color:#ffb49b;box-shadow:0 0 0 4px rgba(255,180,155,.25)}
+.account-bar{min-height:42px;margin:10px 0 16px}.account-chip{background:#eeeaff;color:#4f3db1}.account-btn{border:1px solid #ddd7fa;background:#fff;color:#4937ab;border-radius:11px;padding:9px 13px}
+.trust-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:4px 0 28px}.trust-item{display:flex;align-items:center;gap:12px;padding:15px 16px;background:#fff;border:1px solid var(--line);border-radius:17px;box-shadow:0 6px 20px rgba(38,29,75,.035)}.trust-icon{width:42px;height:42px;flex:none;display:grid;place-items:center;border-radius:13px;background:#f0edff;font-size:20px}.trust-item strong{display:block;font-size:13px}.trust-item small{display:block;color:var(--muted);font-size:11px;margin-top:4px;line-height:1.5}
+.toolbar{gap:9px;padding:3px 0 13px;scrollbar-width:thin}.cat{border:1px solid var(--line);background:#fff;color:#555269;border-radius:999px;padding:10px 16px;font-weight:700;transition:.2s}.cat:hover{border-color:#bdb4f3;color:#4f3bb9}.cat.active{background:#211950;color:#fff;border-color:#211950;box-shadow:0 5px 14px rgba(33,25,80,.16)}
+.section-head{align-items:center;margin:7px 0 15px}.section-head h2{font-size:24px;letter-spacing:-.3px}.status{color:#77758b;font-size:12px}
+.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.card{position:relative;overflow:hidden;background:#fff;border:1px solid var(--line);border-radius:19px;padding:17px;box-shadow:0 7px 24px rgba(38,29,75,.045);transition:transform .2s,border-color .2s,box-shadow .2s}.card:hover{transform:translateY(-3px);border-color:#d4cdf8;box-shadow:0 15px 34px rgba(51,37,119,.1)}
+.product-icon{height:62px;width:62px;border:0;border-radius:18px;background:linear-gradient(145deg,#f1edff,#fff0e9);font-size:29px;margin-bottom:14px}.product-name{color:#211e37;font-size:15px;min-height:44px}.product-type{color:#89869b;font-size:12px}.product-price{color:#503bc1;font-size:18px;margin-top:13px}.buy{background:linear-gradient(110deg,#725ce8,#523bc9);border-radius:11px;padding:12px;margin-top:12px;box-shadow:0 5px 13px rgba(89,67,202,.16);transition:filter .2s,transform .2s}.buy:hover{filter:brightness(1.06);transform:translateY(-1px)}
+.empty{color:#77758b;background:#fff;border:1px dashed #d6d2e5;border-radius:17px}.notice{background:#f5f3ff;border:1px solid #e5e0ff;color:#5a5477;border-radius:13px}
+.drawer{background:#fff;border-left:1px solid var(--line);box-shadow:-18px 0 55px rgba(22,18,48,.12)}.drawer-head,.cart-foot{border-color:var(--line)}.cart-item{border-color:var(--line)}.cart-item small{color:var(--muted)}.remove,.secondary{border:1px solid var(--line);background:#fff;color:#514b69;border-radius:11px}.primary{background:linear-gradient(110deg,#725ce8,#523bc9);color:#fff;border-radius:11px;box-shadow:0 7px 18px rgba(89,67,202,.16)}
+.modal{background:rgba(22,18,48,.56);backdrop-filter:blur(5px)}.modal-box{background:#fff;color:var(--text);border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 80px rgba(17,13,45,.22)}.modal-head{padding-bottom:14px;border-bottom:1px solid var(--line)}.modal-head h2{color:#211950}.close{border:1px solid var(--line);background:#fff;color:#555269;border-radius:10px}.field label{color:#5d5970}.field input,.field select,.field textarea,.payment-option,.review-box{background:#faf9fd;color:var(--text);border:1px solid var(--line);border-radius:11px}.payment-option{text-align:start}.payment-option.selected{border-color:#7864e2;background:#f3f0ff}.payment-option small,.order-item small{color:#77758b}.review-box,.order-items{border-color:var(--line)}.order-item{border-color:var(--line)}.review-row{border-color:var(--line)}.status-box{background:#f0efff;border-color:#dcd6ff;color:#504879}.success-icon{background:#e8f8f2;border-color:#b5ebd8;color:#178a66}
+footer{padding:38px 0 46px;color:#858197}
+@media(min-width:650px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(min-width:980px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media(max-width:650px){.wrap{padding-inline:15px}.header-inner{height:66px}.brand{font-size:18px}.hero{padding-top:20px}.hero-card{min-height:270px;padding:27px 22px;border-radius:23px}.hero h1{font-size:34px}.trust-row{grid-template-columns:1fr;gap:8px;margin:0 0 22px}.trust-item{padding:11px 13px}.trust-icon{width:38px;height:38px}.toolbar{margin-inline:-15px;padding-inline:15px}.section-head h2{font-size:21px}.grid{gap:10px}.card{padding:13px;border-radius:16px}.product-icon{height:52px;width:52px;border-radius:15px;font-size:25px}.product-name{font-size:14px}.product-price{font-size:16px}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}
+/* Owner-selected modern blue theme */
+:root{--bg:#f5f8fd;--panel:#fff;--panel2:#edf4fd;--line:#dce7f4;--text:#17243a;--muted:#71819a;--blue:#2878dc;--blue2:#175bbc;--white:#fff;--success:#168264;--danger:#d64c62;--shadow:0 18px 55px rgba(24,61,111,.1)}
+.brand{color:#162b49}.brand span{color:#3d8beb}
+.hero-card{background:radial-gradient(ellipse at 12% 15%,rgba(94,180,255,.3),transparent 31%),radial-gradient(ellipse at 88% 100%,rgba(98,131,255,.4),transparent 35%),linear-gradient(120deg,#102c50,#15549b 57%,#337fe0);box-shadow:0 24px 60px rgba(21,68,129,.2)}
+.hero-card:after{background:rgba(255,255,255,.09)}.hero-eyebrow{color:#d9edff}.hero-cta{color:#fff}
+.account-chip{background:#e8f2ff;color:#245b9e}.account-btn{border-color:#d7e5f5;color:#255e9f}.account-btn:hover{border-color:#a9c9ec;background:#f1f7ff}
+.trust-icon{background:#eaf3ff}.cat:hover{border-color:#a9c9ec;color:#1d5da5}.cat.active{background:#174d88;color:#fff;border-color:#174d88;box-shadow:0 5px 14px rgba(23,77,136,.17)}
+.product-icon{background:linear-gradient(145deg,#e6f1ff,#eff7ff);color:#225fa7}.product-price{color:#2167ba}.buy{background:linear-gradient(110deg,#438be5,#1e63bd);box-shadow:0 5px 13px rgba(42,111,196,.18)}
+.empty{border-color:#bfd2e8}.notice{background:#eff6ff;border-color:#d7e8fb;color:#3d5e83}
+.drawer{box-shadow:-18px 0 55px rgba(23,55,95,.12)}.primary{background:linear-gradient(110deg,#438be5,#1e63bd);box-shadow:0 7px 18px rgba(42,111,196,.2)}
+.modal-head h2{color:#194d82}.payment-option.selected{border-color:#4a8cda;background:#edf5ff}.status-box{background:#edf5ff;border-color:#d3e4f7;color:#385b81}
+.policies{margin:30px 0 0;padding:22px;background:#fff;border:1px solid var(--line);border-radius:20px}.policies h2{font-size:20px;margin:0 0 14px}.policy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.policy-card{padding:15px;border-radius:14px;background:#f5f8fd;border:1px solid #e7eef7}.policy-card h3{font-size:14px;margin:0 0 7px;color:#1c5189}.policy-card p{font-size:12px;line-height:1.8;color:#667993;margin:0}.support-link{display:inline-flex;gap:7px;align-items:center;margin-top:14px;padding:10px 14px;border-radius:11px;background:#eaf4ff;color:#1d5da5;text-decoration:none;font-weight:800;font-size:13px}.support-link:hover{background:#dcecff}
+.featured-tag{display:inline-flex;align-items:center;gap:4px;margin:0 0 9px;padding:5px 8px;border:1px solid #cfe2f7;border-radius:999px;background:#eff7ff;color:#1d5da5;font-size:10px;font-weight:800}
+@media(max-width:650px){.policy-grid{grid-template-columns:1fr}.policies{padding:17px}.policy-card{padding:13px}}
+/* Final brand palette: deep navy, metallic gold, and neon cyan */
+:root{--bg:#061426;--panel:#0b1e33;--panel2:#102942;--line:#25445e;--text:#f1f4f6;--muted:#a8b6c3;--blue:#55dff0;--blue2:#24bcd5;--white:#fff;--success:#4bd2a0;--danger:#ff7a87;--shadow:0 18px 55px rgba(0,0,0,.34)}
+body{background:radial-gradient(ellipse at 50% -18%,#153656 0,#0a1d32 35%,#040b15 78%);color:var(--text)}
+.header{background:rgba(3,11,21,.94);border-bottom-color:rgba(50,86,116,.55);box-shadow:0 6px 22px rgba(0,0,0,.2)}
+.brand{color:#f0f3f6}.brand span{color:#55dff0}
+.icon-btn,.lang-btn{background:#0b1e33;color:#edf2f5;border-color:#294863}.icon-btn:hover,.lang-btn:hover{border-color:#57ddec;background:#102943}
+.badge{background:linear-gradient(135deg,#f5e2a7,#bd913c);color:#211807}
+.hero-card{background:radial-gradient(ellipse at 11% 8%,rgba(65,213,236,.2),transparent 34%),radial-gradient(ellipse at 88% 100%,rgba(201,157,70,.17),transparent 36%),linear-gradient(120deg,#07172a,#0c2b49 58%,#124166);border:1px solid #28506d;box-shadow:0 24px 60px rgba(0,0,0,.28)}
+.hero-card:after{background:rgba(71,216,236,.075);box-shadow:0 0 0 35px rgba(71,216,236,.025),0 0 0 70px rgba(71,216,236,.018)}
+.hero-eyebrow{color:#c9f8fc;background:rgba(61,202,224,.1);border-color:rgba(76,217,235,.28)}.hero h1{color:#f4f6f8}.hero p{color:#ccd7e1}
+.search{background:#0a1b2e;color:#f3f6f8;border-color:#31526b;box-shadow:0 10px 28px rgba(0,0,0,.18)}.search::placeholder{color:#a9b6c2}.search:focus{border-color:#5be3f1;box-shadow:0 0 0 4px rgba(68,213,235,.18)}
+.hero-cta{color:#68e5f0}
+.account-chip{background:#112d45;color:#ccfaff}.account-btn{background:#0b1e33;color:#e9f1f4;border-color:#2a4c66}.account-btn:hover{background:#112b45;border-color:#53d8e9}
+.trust-item{background:#0a1c2e;border-color:#203d55;box-shadow:0 6px 20px rgba(0,0,0,.15)}.trust-icon{background:#102b42;color:#6be5f2}
+.trust-item strong{color:#ecf2f5}.trust-item small{color:#a7b5c2}
+.cat{background:#0b1e33;border-color:#29465f;color:#dce5eb}.cat:hover{border-color:#53d8e9;color:#75e7f1}.cat.active{background:linear-gradient(135deg,#f4dfa0,#c39a48);color:#201807;border-color:#e2c36f;box-shadow:0 5px 14px rgba(198,154,65,.2)}
+.section-head h2{color:#f2f5f7}.status{color:#9cabb8}
+.card{background:linear-gradient(160deg,#0d2136,#09192a);border-color:#213f58;box-shadow:0 8px 25px rgba(0,0,0,.19)}.card:hover{border-color:#3b7086;box-shadow:0 15px 34px rgba(0,0,0,.3)}
+.product-icon{background:linear-gradient(145deg,#112f48,#17334a);border:1px solid #24516a;color:#69e4f0}.product-name{color:#f0f4f6}.product-type{color:#a7b7c4}.product-price{color:#67e3ef}
+.buy{background:linear-gradient(135deg,#f5e6b4 0%,#d9b761 42%,#b3822d 100%);color:#211806;box-shadow:0 6px 16px rgba(191,146,54,.2)}.buy:hover{filter:brightness(1.08)}
+.featured-tag{background:#0c2c41;border-color:#2c7886;color:#83edf3}
+.empty{background:#0a1b2d;color:#aebbc6;border-color:#31526c}.notice{background:#0b263b;border-color:#277185;color:#c5d7df}
+.drawer{background:#071627;border-color:#203d55;box-shadow:-18px 0 55px rgba(0,0,0,.38)}.drawer-head,.cart-foot,.cart-item{border-color:#203d55}.drawer-head,.drawer-body,.cart-foot{color:#edf2f5}.cart-item small{color:#a7b5c2}.remove,.secondary{background:#0c2034;border-color:#2b4a63;color:#e1eaf0}.remove:hover,.secondary:hover{border-color:#53d8e9;background:#112b43}
+.primary{background:linear-gradient(135deg,#f5e6b4 0%,#d9b761 42%,#b3822d 100%);color:#211806;box-shadow:0 7px 18px rgba(191,146,54,.2)}.primary:hover{filter:brightness(1.08)}
+.modal{background:rgba(1,7,14,.76)}.modal-box{background:#091a2b;color:#edf2f5;border-color:#294861;box-shadow:0 24px 80px rgba(0,0,0,.48)}.modal-head{border-color:#203d55}.modal-head h2{color:#e9f3f6}.close{background:#0c2034;border-color:#2b4a63;color:#e3ebef}
+.field label{color:#c1d0da}.field input,.field select,.field textarea,.payment-option,.review-box{background:#071729;color:#edf2f5;border-color:#294861}.field input:focus,.field select:focus,.field textarea:focus{border-color:#5be3f1}.payment-option small,.order-item small{color:#adbbc6}.payment-option.selected{border-color:#dec16e;background:#13283a;box-shadow:0 0 0 2px rgba(220,190,102,.12)}.order-items,.order-item,.review-row{border-color:#203d55}.status-box{background:#0d293e;border-color:#2d7283;color:#c9dbe2}.success-icon{background:#0c3531;border-color:#278b76;color:#63e1bb}
+.policies{background:#091a2b;border-color:#203d55}.policies h2{color:#f0f4f6}.policy-card{background:#0c2034;border-color:#203d55}.policy-card h3{color:#67ddea}.policy-card p{color:#b4c1cb}.support-link{background:linear-gradient(135deg,#f5e6b4,#d9b761,#b3822d);color:#211806}.support-link:hover{filter:brightness(1.08);background:linear-gradient(135deg,#f5e6b4,#d9b761,#b3822d)}
+footer{color:#9baab7}.toast{background:#dffaff;color:#073040;border:1px solid #6de3f0}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #55e3f0;outline-offset:3px}
 </style>  
 </head>  
 <body>  
-<header class="header"><div class="wrap header-inner"><div class="brand">ABESHA <span>STORE</span></div><div class="header-actions"><button class="lang-btn" id="langBtn" type="button">EN</button><button class="icon-btn cart-btn" id="cartBtn" type="button">🛒 <span id="cartLabel">السلة</span><span class="badge" id="cartCount">0</span></button></div></div></header>  
+<header class="header"><div class="wrap header-inner"><div class="brand">ABESHA <span>STORE</span></div><div class="header-actions"><button class="lang-btn" id="langBtn" type="button" aria-label="Switch language">EN</button><button class="icon-btn cart-btn" id="cartBtn" type="button" aria-label="فتح سلة المشتريات">🛒 <span id="cartLabel">السلة</span><span class="badge" id="cartCount">0</span></button></div></div></header>
 <main class="wrap">  
-<section class="hero"><div class="hero-card"><h1 id="heroTitle">منتجات رقمية، بسرعة ووضوح.</h1><p id="heroText">ألعاب، بطاقات هدايا، شحن واشتراكات رقمية من ABESHA STORE.</p><input class="search" id="search" placeholder="ابحث عن منتج..." autocomplete="off"></div></section>  
+<section class="hero"><div class="hero-card"><div class="hero-eyebrow" id="heroEyebrow">✦ متجر أبيشا الرقمي</div><h1 id="heroTitle">كل عالمك الرقمي، في مكان واحد.</h1><p id="heroText">اشحن ألعابك واكتشف بطاقاتك ومنتجاتك الرقمية المفضلة — بخطوات بسيطة وأسعار واضحة.</p><input class="search" id="search" placeholder="ابحث عن لعبة أو بطاقة أو شحن..." autocomplete="off" aria-label="ابحث عن منتج"><a class="hero-cta" id="heroCta" href="#products">تصفح كل المنتجات <span aria-hidden="true">←</span></a></div></section>
 <div class="account-bar" id="accountBar"></div>  
+<section class="trust-row" aria-label="معلومات المتجر"><div class="trust-item"><span class="trust-icon">🎮</span><span><strong>كل احتياجاتك الرقمية</strong><small>ألعاب، شحن، بطاقات واشتراكات</small></span></div><div class="trust-item"><span class="trust-icon">💜</span><span><strong>السعر واضح قبل الطلب</strong><small>راجع الإجمالي قبل إتمام الشراء</small></span></div><div class="trust-item"><span class="trust-icon">📦</span><span><strong>تابع طلباتك بسهولة</strong><small>سجّل الدخول لمراجعة حالة طلبك</small></span></div></section>
 <div class="toolbar" id="categories"><button class="cat active" data-cat="all" type="button">الكل</button><button class="cat" data-cat="mobile" type="button">شحن الألعاب</button><button class="cat" data-cat="game" type="button">الألعاب</button><button class="cat" data-cat="gift" type="button">بطاقات الهدايا</button><button class="cat" data-cat="subscription" type="button">الاشتراكات</button><button class="cat" data-cat="steam" type="button">Steam</button></div>  
 <div class="section-head"><h2 id="productsTitle">المنتجات</h2><span class="status" id="status">جاري الاتصال...</span></div>  
-<div class="notice" id="notice" style="text-align:center;font-size:15px;line-height:2.1">﴿إِنَّ اللَّهَ وَمَلَائِكَتَهُ يُصَلُّونَ عَلَى النَّبِيِّ ۚ يَا أَيُّهَا الَّذِينَ آمَنُوا صَلُّوا عَلَيْهِ وَسَلِّمُوا تَسْلِيمًا﴾</div>  
-<section class="grid" id="products"><div class="empty">جاري تحميل الكتالوج...</div></section>  
-<footer>ABESHA STORE — Digital Products</footer>  
+<div class="notice" id="notice" style="text-align:center">يتم مراجعة التحويل يدويًا قبل بدء تنفيذ الطلب.</div>
+<section class="grid" id="products" aria-live="polite"><div class="empty">جاري تحميل الكتالوج...</div></section>
+<section class="policies" aria-labelledby="policiesTitle"><h2 id="policiesTitle">معلومات تهمك</h2><div class="policy-grid"><article class="policy-card"><h3 id="deliveryTitle">التسليم</h3><p id="deliveryCopy">يبدأ تنفيذ الطلب بعد التحقق من الدفع، وعادةً يكتمل خلال دقائق.</p></article><article class="policy-card"><h3 id="refundTitle">الاسترجاع والدعم</h3><p id="refundCopy">لا يمكن استرجاع أو استبدال الأكواد بعد تسليمها واستخدامها بنجاح. عند وجود مشكلة تقنية، تواصل مع الدعم للتحقق خلال 24 ساعة.</p></article><article class="policy-card"><h3 id="accuracyTitle">راجع بياناتك</h3><p id="accuracyCopy">تأكد من صحة معرّفات اللعبة ورقم التحويل قبل إرسال الطلب.</p></article></div><a class="support-link" id="supportLink" href="https://wa.me/249968247932" target="_blank" rel="noopener noreferrer">💬 تواصل عبر واتساب <span dir="ltr">0968247932</span></a></section>
+<footer><span id="footerBrand">ABESHA STORE — منتجاتك الرقمية بسهولة</span></footer>
 </main>  
   
 <div class="drawer-backdrop" id="drawerBackdrop"></div>  
@@ -74,7 +153,7 @@ const state={
   filtered:[],  
   category:"all",  
   search:"",  
-  cart:[],  
+  cart:(()=>{try{const saved=JSON.parse(sessionStorage.getItem("abesha-cart")||"[]");return Array.isArray(saved)?saved.filter(item=>item&&typeof item.name==="string"&&Number(item.price)>0):[]}catch{return []}})(),  
   lang:"ar",  
   visibleCount:24,  
   checkoutStep:1,  
@@ -149,6 +228,15 @@ function categoryOf(p){
   if(/gift card|giftcard|google play|apple gift|playstation|xbox|nintendo/.test(raw)) return "gift";  
   return "game";  
 }  
+
+function featuredRank(p){
+  const raw=[p.name,p.title,p.category,p.subcategory,p.type,p.brand,p.product_name,p.product_family,p.description,p.platform,p.tags].flat().filter(Boolean).join(" ").toLowerCase();
+  if(/pubg/.test(raw)&&(/\buc\b|mobile/.test(raw)||categoryOf(p)==="mobile"))return 0;
+  if(/free[\s-]*fire/.test(raw))return 1;
+  if(/playstation|\bpsn\b|ps store/.test(raw))return 2;
+  return 3;
+}
+
 function priceOf(p){  
   const value=Number(p.price_sdg);  
   return Number.isFinite(value)&&value>0 ? value : null;  
@@ -188,6 +276,7 @@ function removeCart(index){
 }  
   
 function updateCart(){  
+  try{sessionStorage.setItem("abesha-cart",JSON.stringify(state.cart));}catch{}  
   $("cartCount").textContent=state.cart.length;  
   
   if(!state.cart.length){  
@@ -234,7 +323,7 @@ function render(){
     const name=nameOf(p).toLowerCase();  
     const cat=categoryOf(p);  
     return (!q||name.includes(q)) && (state.category==="all"||cat===state.category);  
-  });  
+  }).sort((a,b)=>featuredRank(a)-featuredRank(b));  
   
   if(!state.filtered.length){  
     productsBox.innerHTML='<div class="empty">لا توجد منتجات مطابقة حاليًا.</div>';  
@@ -276,14 +365,17 @@ function renderProduct(p){
   const name=nameOf(p);  
   const price=priceOf(p);  
   const icon=categoryOf(p)==="mobile"?"🎮":categoryOf(p)==="gift"?"🎁":categoryOf(p)==="subscription"?"⭐":categoryOf(p)==="steam"?"🟦":"🕹️";  
+  const featured=featuredRank(p)<3;
+  const featuredLabel=state.lang==="en"?"Featured":"اختيار مميز";
   
   return `  
     <article class="card">  
+      ${featured?`<div class="featured-tag">✦ ${featuredLabel}</div>`:""}
       <div class="product-icon">${icon}</div>  
       <div class="product-name">${esc(name)}</div>  
       <div class="product-type">${esc(typeOf(p))}</div>  
       <div class="product-price">${price?formatSDG(price):"السعر قريبًا"}</div>  
-      <button class="buy" type="button" data-add="1" data-id="${esc(id)}" data-name="${esc(name)}" data-price="${price||0}">${price?"أضف للسلة":"غير متاح"}</button>  
+      <button class="buy" type="button" data-add="1" data-id="${esc(id)}" data-name="${esc(name)}" data-price="${price||0}">${price?"أضف للسلة":"غير متاح"}</button>
     </article>  
   `;  
 }  
@@ -293,11 +385,19 @@ function bindProductButtons(){
     btn.addEventListener("click",()=>{  
       const price=Number(btn.dataset.price)||0;  
       if(!price){ toast("السعر غير متاح حاليًا"); return; }  
+      const product=state.products.find(item=>idOf(item)===btn.dataset.id);
+      const fields={};
+      for(const field of (Array.isArray(product?.fields)?product.fields:[])){
+        const value=window.prompt(field.label||field.key||"Product information");
+        if(value===null||!value.trim())return;
+        fields[field.key]=value.trim();
+      }
       addCart({  
         productId:btn.dataset.id,  
         name:btn.dataset.name,  
         qty:btn.dataset.qty||"",  
-        price  
+        price,
+        fields
       });  
     });  
   });  
@@ -487,19 +587,21 @@ function renderCheckoutStep(){
   if(state.checkoutStep===2){  
     $("orderTitle").textContent="اختيار طريقة الدفع";  
     $("orderContent").innerHTML=`  
-      <div class="notice">اختر طريقة الدفع. يمكنك إدخال رقم العملية إن كان متاحًا؛ وسيظل الطلب بانتظار المراجعة حتى تأكيد الدفع.</div>  
+      <div class="notice" id="paymentInstructions">${state.lang==="en"?"Transfer to the account, verify the name shown in your payment app and let us know. Enter the transaction reference; we manually verify payment before fulfillment.":"حوّل إلى رقم الحساب، وتحقق من الاسم الظاهر في تطبيق الدفع وأخبرنا به. أدخل رقم العملية؛ نراجع التحويل يدويًا قبل بدء تنفيذ الطلب."}</div>
       <div class="payment-options">  
-        <button class="payment-option" data-payment="Bankak" type="button"><strong>🏦 Bankak</strong><small>الدفع عبر بنكك — سيتم تفعيل التفاصيل لاحقًا</small></button>  
-        <button class="payment-option" data-payment="MyCashi" type="button"><strong>💳 MyCashi</strong><small>الدفع عبر ماي كاشي — سيتم تفعيل التفاصيل لاحقًا</small></button>  
+        <button class="payment-option" data-payment="Bankak" type="button"><strong>🏦 Bankak</strong><small>${state.lang==="en"?"Account number: 3013500":"رقم الحساب: 3013500"}<br>${state.lang==="en"?"Verify the name and inform me":"تحقق من الاسم وأخبرني"}</small></button>
+        <button class="payment-option" data-payment="MyCashi" type="button"><strong>💳 MyCash</strong><small>${state.lang==="en"?"Account number: 402880417":"رقم الحساب: 402880417"}<br>${state.lang==="en"?"Verify the name and inform me":"تحقق من الاسم وأخبرني"}</small></button>
       </div>  
-      <div class="field" style="margin-top:14px"><label>رقم العملية (اختياري)</label><input id="paymentReference" type="text" inputmode="text" placeholder="رقم مرجع التحويل"></div>  
+      <div class="field" style="margin-top:14px"><label>رقم العملية (مطلوب)</label><input id="paymentReference" type="text" inputmode="text" placeholder="رقم مرجع التحويل" required></div>
       <button class="secondary" id="backStep" type="button" style="margin-top:16px">رجوع</button>  
     `;  
   
     document.querySelectorAll("[data-payment]").forEach(btn=>{  
       btn.addEventListener("click",()=>{  
+        const reference=$("paymentReference").value.trim();
+        if(!reference){toast("أدخل رقم العملية أولاً");return;}
         state.customer.payment=btn.dataset.payment;  
-        state.customer.paymentReference=$("paymentReference")?.value.trim()||"";  
+        state.customer.paymentReference=reference;
         state.checkoutStep=3;  
         renderCheckoutStep();  
       });  
@@ -535,11 +637,11 @@ function renderCheckoutStep(){
         <div class="review-row"><span>الإجمالي</span><strong>${formatSDG(cartTotal())}</strong></div>  
       </div>  
       ${state.customer.note?`<div class="notice">ملاحظة العميل: ${esc(state.customer.note)}</div>`:""}  
-      <button class="primary" id="createTestOrder" type="button" style="margin-top:16px">إرسال الطلب</button>  
+      <button class="primary" id="submitOrder" type="button" style="margin-top:16px">إرسال الطلب</button>  
       <button class="secondary" id="backStep" type="button">رجوع</button>  
     `;  
   
-    $("createTestOrder").addEventListener("click",createTestOrder);  
+    $("submitOrder").addEventListener("click",submitOrder);  
     $("backStep").addEventListener("click",()=>{  
       state.checkoutStep=2;  
       renderCheckoutStep();  
@@ -555,7 +657,7 @@ function renderCheckoutStep(){
         <h2>تم استلام الطلب</h2>  
         <p class="muted">رقم الطلب:</p>  
         <div class="order-number">${esc(state.orderNumber)}</div>  
-        <div class="status-box">حالة الطلب الحالية: <strong>بانتظار تأكيد الدفع</strong><br>تم تسجيل الطلب في حسابك، وهو الآن بانتظار مراجعة وتأكيد الدفع. لا يتم تنفيذ الشحن من Fazer قبل تأكيد الدفع.</div>  
+        <div class="status-box">حالة الطلب الحالية: <strong>بانتظار تأكيد الدفع</strong><br>تم تسجيل الطلب. نتحقق من التحويل يدويًا قبل بدء التنفيذ، ويكتمل عادةً خلال دقائق بعد التأكيد.</div>  
         <button class="primary" id="finishOrder" type="button" style="margin-top:18px">إغلاق</button>  
       </div>  
     `;  
@@ -567,8 +669,8 @@ function renderCheckoutStep(){
   }  
 }  
   
-async function createTestOrder(){  
-  const btn=$("createTestOrder");  
+async function submitOrder(){  
+  const btn=$("submitOrder");  
   btn.disabled=true;  
   btn.textContent="جاري إرسال الطلب...";  
   try{  
@@ -581,6 +683,8 @@ async function createTestOrder(){
     const data=await r.json().catch(()=>({}));  
     if(!r.ok)throw new Error(data.error||"تعذر إنشاء الطلب");  
     state.orderNumber=data.order.orderNumber;  
+    state.cart=[];
+    updateCart();
     state.checkoutStep=4;  
     renderCheckoutStep();  
   }catch(err){  
@@ -599,15 +703,42 @@ function setLanguage(){
   document.documentElement.lang=en?"en":"ar";  
   document.documentElement.dir=en?"ltr":"rtl";  
   $("langBtn").textContent=en?"AR":"EN";  
-  $("heroTitle").textContent=en?"Digital products, fast and clear.":"منتجات رقمية، بسرعة ووضوح.";  
-  $("heroText").textContent=en?"Games, gift cards, top-ups and subscriptions from ABESHA STORE.":"ألعاب، بطاقات هدايا، شحن واشتراكات رقمية من ABESHA STORE.";  
+  $("heroTitle").textContent=en?"Your digital world, all in one place.":"كل عالمك الرقمي، في مكان واحد.";  
+  $("heroText").textContent=en?"Top up games and discover your favorite digital cards and products — with simple steps and clear prices.":"اشحن ألعابك واكتشف بطاقاتك ومنتجاتك الرقمية المفضلة — بخطوات بسيطة وأسعار واضحة.";  
+  $("heroEyebrow").textContent=en?"✦ ABESHA DIGITAL STORE":"✦ متجر أبيشا الرقمي";  
+  $("heroCta").innerHTML=en?'Browse all products <span aria-hidden="true">→</span>':'تصفح كل المنتجات <span aria-hidden="true">←</span>';  
   $("cartLabel").textContent=en?"Cart":"السلة";  
   $("productsTitle").textContent=en?"Products":"المنتجات";  
   $("cartTitle").textContent=en?"Shopping Cart":"سلة المشتريات";  
   $("totalLabel").textContent=en?"Total":"الإجمالي";  
   $("checkoutBtn").textContent=en?"Continue":"متابعة الطلب";  
   $("clearBtn").textContent=en?"Clear cart":"تفريغ السلة";  
-  $("search").placeholder=en?"Search products...":"ابحث عن منتج...";  
+  $("search").placeholder=en?"Search games, gift cards or top-ups...":"ابحث عن لعبة أو بطاقة أو شحن...";  
+  $("notice").textContent=en?"Payments are reviewed manually before order fulfillment begins.":"يتم مراجعة التحويل يدويًا قبل بدء تنفيذ الطلب.";  
+  $("policiesTitle").textContent=en?"Good to know":"معلومات تهمك";
+  $("deliveryTitle").textContent=en?"Delivery":"التسليم";
+  $("deliveryCopy").textContent=en?"Orders begin processing after payment is verified and are usually completed within a few minutes.":"يبدأ تنفيذ الطلب بعد التحقق من الدفع، وعادةً يكتمل خلال دقائق.";
+  $("refundTitle").textContent=en?"Refunds and support":"الاسترجاع والدعم";
+  $("refundCopy").textContent=en?"Digital codes cannot be refunded or exchanged after correct delivery and redemption. For technical issues, contact support for verification within 24 hours.":"لا يمكن استرجاع أو استبدال الأكواد بعد تسليمها واستخدامها بنجاح. عند وجود مشكلة تقنية، تواصل مع الدعم للتحقق خلال 24 ساعة.";
+  $("accuracyTitle").textContent=en?"Check your details":"راجع بياناتك";
+  $("accuracyCopy").textContent=en?"Make sure your game IDs and transfer reference are correct before submitting your order.":"تأكد من صحة معرّفات اللعبة ورقم التحويل قبل إرسال الطلب.";
+  $("supportLink").innerHTML=en?'💬 WhatsApp support <span dir="ltr">0968247932</span>':'💬 تواصل عبر واتساب <span dir="ltr">0968247932</span>';
+  $("footerBrand").textContent=en?"ABESHA STORE — Digital products made simple":"ABESHA STORE — منتجاتك الرقمية بسهولة";
+  document.querySelectorAll(".trust-item").forEach((item,index)=>{  
+    const copy=en?[  
+      ["Your digital essentials","Games, top-ups, gift cards and subscriptions"],  
+      ["Clear prices before checkout","Review your total before placing an order"],  
+      ["Keep track of your orders","Sign in to check your order status"]  
+    ][index]:[  
+      ["كل احتياجاتك الرقمية","ألعاب، شحن، بطاقات واشتراكات"],  
+      ["السعر واضح قبل الطلب","راجع الإجمالي قبل إتمام الشراء"],  
+      ["تابع طلباتك بسهولة","سجّل الدخول لمراجعة حالة طلبك"]  
+    ][index];  
+    if(copy){item.querySelector("strong").textContent=copy[0];item.querySelector("small").textContent=copy[1]}  
+  });  
+  const categories=en?["All","Game top-ups","Games","Gift cards","Subscriptions","Steam"]:["الكل","شحن الألعاب","الألعاب","بطاقات الهدايا","الاشتراكات","Steam"];  
+  document.querySelectorAll(".cat").forEach((button,index)=>{if(categories[index])button.textContent=categories[index]});  
+  
 }  
   
 /* =========================  
