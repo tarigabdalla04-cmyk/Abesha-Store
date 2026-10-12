@@ -1,6 +1,5 @@
 const express = require("express");
 const path = require("path");
-const fs = require("fs");
 const crypto = require("crypto");
 const { promisify } = require("util");
 const { Pool } = require("pg");
@@ -180,22 +179,16 @@ async function initDatabase() {
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fulfillment_started_at TIMESTAMPTZ;
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS fulfillment_last_attempt_at TIMESTAMPTZ;
     ALTER TABLE order_items ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
-    CREATE TABLE IF NOT EXISTS store_settings (
-      setting_key VARCHAR(80) PRIMARY KEY,
-      setting_value JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
   `);
-  await dbPool.query(
-    "INSERT INTO store_settings (setting_key, setting_value) VALUES ('store', $1::jsonb) ON CONFLICT (setting_key) DO NOTHING",
-    [JSON.stringify(storeSettings)]
-  );
-  // Move known initial/legacy rates to the owner's current starting rate once.
-  // Any other value was explicitly configured in the admin panel and is preserved.
-  await dbPool.query(`UPDATE store_settings SET setting_value = jsonb_set(setting_value, '{pricing,usdToSdg}', '8900'::jsonb), updated_at = NOW()
-    WHERE setting_key = 'store' AND setting_value #>> '{pricing,usdToSdg}' IN ('8250', '8300')`);
-  const settingResult = await dbPool.query("SELECT setting_value FROM store_settings WHERE setting_key = 'store'");
-  if (settingResult.rows[0]?.setting_value) storeSettings = settingResult.rows[0].setting_value;
+  const settingResult = await dbPool.query("SELECT id, version, settings_json FROM store_settings");
+  if (settingResult.rowCount !== 1) {
+    throw new Error(`Expected exactly one store_settings row; found ${settingResult.rowCount}. Refusing to create or replace settings.`);
+  }
+  if (!settingResult.rows[0].settings_json || typeof settingResult.rows[0].settings_json !== "object" || Array.isArray(settingResult.rows[0].settings_json)) {
+    throw new Error("store_settings.settings_json is not a JSON object; refusing to replace settings.");
+  }
+  storeSettings = settingResult.rows[0].settings_json;
+  storeSettingsReady = true;
   await dbPool.query("DELETE FROM sessions WHERE expires_at < NOW()");
   console.log("[DB] PostgreSQL ready");
   return true;
@@ -244,12 +237,12 @@ function requireDatabase(res) {
 // ======================================================
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-const STORE_SETTINGS_FILE = path.join(__dirname, "store-settings.json");
 const STORE_SETTINGS_VERSION = 1;
 
 let pricedCatalogCache = null;
 let pricedCatalogBuiltAt = 0;
 let priceRefreshPromise = null;
+let storeSettingsReady = false;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -372,26 +365,48 @@ const DEFAULT_STORE_SETTINGS = {
   }
 };
 
-function loadStoreSettings() {
-  try {
-    if (!fs.existsSync(STORE_SETTINGS_FILE)) return DEFAULT_STORE_SETTINGS;
-    return JSON.parse(fs.readFileSync(STORE_SETTINGS_FILE, "utf8"));
-  } catch (error) {
-    return DEFAULT_STORE_SETTINGS;
-  }
-}
+let storeSettings = JSON.parse(JSON.stringify(DEFAULT_STORE_SETTINGS));
 
-let storeSettings = loadStoreSettings();
+function mergeSettings(current, patch) {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return current;
+  const merged = { ...current };
+  for (const [key, value] of Object.entries(patch)) {
+    merged[key] = value && typeof value === "object" && !Array.isArray(value)
+      ? mergeSettings(current?.[key] && typeof current[key] === "object" && !Array.isArray(current[key]) ? current[key] : {}, value)
+      : value;
+  }
+  return merged;
+}
 
 async function saveStoreSettings(settings) {
   if (!dbPool) throw new Error("Database is not configured");
-  const next = { ...DEFAULT_STORE_SETTINGS, ...storeSettings, ...settings };
-  await dbPool.query(
-    "INSERT INTO store_settings (setting_key, setting_value, updated_at) VALUES ('store', $1::jsonb, NOW()) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value, updated_at = NOW()",
-    [JSON.stringify(next)]
-  );
-  storeSettings = next;
-  return storeSettings;
+  const client = await dbPool.connect();
+  try {
+    await client.query("BEGIN");
+    const currentResult = await client.query("SELECT id, settings_json FROM store_settings FOR UPDATE");
+    if (currentResult.rowCount !== 1) {
+      throw new Error(`Expected exactly one store_settings row; found ${currentResult.rowCount}. Refusing to save.`);
+    }
+    const current = currentResult.rows[0].settings_json;
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      throw new Error("store_settings.settings_json is not a JSON object; refusing to save.");
+    }
+    const next = mergeSettings(current, settings);
+    const updated = await client.query(
+      "UPDATE store_settings SET settings_json = $1::jsonb, updated_at = NOW() WHERE id = $2 RETURNING settings_json",
+      [JSON.stringify(next), currentResult.rows[0].id]
+    );
+    if (updated.rowCount !== 1) throw new Error("The existing store_settings row could not be updated.");
+    await client.query("COMMIT");
+    storeSettings = updated.rows[0].settings_json;
+    storeSettingsReady = true;
+    return storeSettings;
+  } catch (error) {
+    try { await client.query("ROLLBACK"); } catch (_) {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function getPricingConfig() {
@@ -568,6 +583,7 @@ app.post("/api/admin/login", (req, res) => {
 });
 
 app.get("/api/admin/settings", requireAdmin, (req, res) => {
+  if (!storeSettingsReady) return res.status(503).json({ ok: false, error: "Persistent settings are unavailable." });
   res.setHeader("Content-Type", "application/json");
   res.json({ ok: true, settings: storeSettings });
 });
@@ -578,8 +594,7 @@ app.post("/api/admin/settings", requireAdmin, async (req, res) => {
     return res.status(400).json({ ok: false, error: "Exchange rate must be between 1 and 1,000,000 SDG per USD." });
   }
   try {
-    const pricing = { ...getPricingConfig(), usdToSdg: rate };
-    const settings = await saveStoreSettings({ pricing });
+    const settings = await saveStoreSettings({ pricing: { usdToSdg: rate } });
     pricedCatalogCache = null;
     return res.json({ ok: true, settings });
   } catch (error) {
