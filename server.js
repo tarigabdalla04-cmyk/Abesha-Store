@@ -3,7 +3,122 @@ const path = require("path");
 const crypto = require("crypto");
 const { promisify } = require("util");
 const { Pool } = require("pg");
-const storeCore = require("./lib/store-core");
+const storeCore = (() => {
+  function roundCommercialPrice(value, rounding = {}) {
+    const price = Number(value);
+    if (!Number.isFinite(price) || price <= 0) return 0;
+    const step = price < 10000 ? rounding.under10000
+      : price < 100000 ? rounding.from10000To100000
+        : price < 500000 ? rounding.from100000To500000 : rounding.from500000;
+    const increment = Number(step);
+    return increment > 0 ? Math.ceil(price / increment) * increment : Math.ceil(price);
+  }
+
+  function markupForCost(costSdg, tiers = []) {
+    const cost = Number(costSdg);
+    if (!Number.isFinite(cost) || cost <= 0) return 0;
+    const tier = tiers.find(item => item && (item.maxCost == null || cost <= Number(item.maxCost)));
+    return tier && Number.isFinite(Number(tier.markup)) ? Number(tier.markup) : 0;
+  }
+
+  function calculateSalePrice(priceUsd, pricing = {}) {
+    const usd = Number(priceUsd);
+    const exchangeRate = Number(pricing.usdToSdg);
+    if (!Number.isFinite(usd) || usd <= 0 || !Number.isFinite(exchangeRate) || exchangeRate <= 0) return 0;
+    const cost = usd * exchangeRate;
+    return roundCommercialPrice(cost * (1 + markupForCost(cost, pricing.tiers)), pricing.rounding);
+  }
+
+  function applyProductSettings(product, settings = {}) {
+    const id = String(product?.id || "");
+    const override = Number(settings.pricing?.priceOverrides?.[id]);
+    const base = Number(product?.base_price_sdg ?? product?.price_sdg);
+    const price = Number.isFinite(override) && override > 0 ? override : base;
+    const discount = Number(settings.discounts?.[id]);
+    const finalPrice = Number.isFinite(discount) && discount > 0 && discount <= 90 ? price * (1 - discount / 100) : price;
+    const categoryRule = settings.categoryRules?.[String(product?.category_id || "")] || {};
+    return {
+      ...product,
+      price_sdg: Math.max(0, Math.round(finalPrice)),
+      ...(categoryRule.storeCategory ? { store_category: categoryRule.storeCategory } : {}),
+      ...(typeof categoryRule.religiousDisclaimer === "boolean" ? { religious_disclaimer: categoryRule.religiousDisclaimer } : {})
+    };
+  }
+
+  function safeProviderImageUrl(value) {
+    if (typeof value !== "string" || value.length > 2048) return "";
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" ? url.toString() : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function catalogIsValid(products) {
+    return Array.isArray(products) && products.length > 0 && products.every(product => {
+      const price = Number(product?.base_price_sdg ?? product?.price_sdg);
+      return product && typeof product === "object" && String(product.id || "").trim() && Number.isFinite(price) && price > 0;
+    }) && new Set(products.map(product => String(product.id))).size === products.length;
+  }
+
+  function adminKeyMatches(expected, actual) {
+    if (typeof expected !== "string" || !expected || typeof actual !== "string") return false;
+    const expectedBuffer = Buffer.from(expected);
+    const actualBuffer = Buffer.from(actual);
+    return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+  }
+
+  function adminToken(key) {
+    return crypto.createHmac("sha256", key).update("abesha-admin-session-v1").digest("hex");
+  }
+
+  function createAdminSessionToken(key) {
+    return adminToken(String(key));
+  }
+
+  function verifyAdminSessionToken(key, token) {
+    if (typeof key !== "string" || !key || typeof token !== "string") return false;
+    const expectedBuffer = Buffer.from(adminToken(key));
+    const actualBuffer = Buffer.from(token);
+    return expectedBuffer.length === actualBuffer.length && crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+  }
+
+  function deterministicOrderNumber(customerId, requestKey) {
+    const digest = crypto.createHash("sha256").update(`${customerId}:${requestKey}`).digest("hex").slice(0, 24).toUpperCase();
+    return `ABS-${digest}`;
+  }
+
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+    return value;
+  }
+
+  function sameOrderIntent(order, storedItems, intent) {
+    if (!order || !Array.isArray(storedItems) || !Array.isArray(intent?.items)) return false;
+    const expectedItems = intent.items.map(item => ({
+      product_id: String(item?.productId || ""),
+      quantity: Number(item?.quantity || 1),
+      fields: canonical(item?.fields || {})
+    })).sort((a, b) => a.product_id.localeCompare(b.product_id));
+    const actualItems = storedItems.map(item => ({
+      product_id: String(item.product_id || ""),
+      quantity: Number(item.quantity),
+      fields: canonical(item.fields_json?.buyer || {})
+    })).sort((a, b) => a.product_id.localeCompare(b.product_id));
+    return String(order.payment_method) === String(intent.paymentMethod) &&
+      String(order.payment_reference || "") === String(intent.paymentReference || "") &&
+      String(order.customer_note || "") === String(intent.note || "") &&
+      JSON.stringify(actualItems) === JSON.stringify(expectedItems);
+  }
+
+  return {
+    roundCommercialPrice, markupForCost, calculateSalePrice, applyProductSettings,
+    safeProviderImageUrl, catalogIsValid, adminKeyMatches, createAdminSessionToken,
+    verifyAdminSessionToken, deterministicOrderNumber, sameOrderIntent
+  };
+})();
 const catalogConfig = require("./catalog-config.json");
 
 const app = express();
@@ -821,7 +936,14 @@ app.post("/api/admin/catalog/refresh", requireAdmin, async (req, res) => {
 // المسارات العامة (PUBLIC API & ROUTES)
 // ======================================================
 
-app.get("/health", async (req, res) => {
+// Deployment liveness probe: the HTTP process can serve the storefront even
+// while optional database-backed features are unavailable.
+app.get("/health", (req, res) => {
+  res.json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
+});
+
+// Dependency readiness probe for monitoring database-backed features.
+app.get("/ready", async (req, res) => {
   let ready = Boolean(dbPool && databaseReady && storeSettingsReady);
   if (ready) {
     try { await dbPool.query({ text: "SELECT 1", statement_timeout: 3000 }); }
