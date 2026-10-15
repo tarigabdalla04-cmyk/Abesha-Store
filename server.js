@@ -3,9 +3,13 @@ const path = require("path");
 const crypto = require("crypto");
 const { promisify } = require("util");
 const { Pool } = require("pg");
+const storeCore = require("./lib/store-core");
+const catalogConfig = require("./catalog-config.json");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const configuredProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS || "1", 10);
+app.set("trust proxy", Number.isInteger(configuredProxyHops) && configuredProxyHops >= 0 && configuredProxyHops <= 5 ? configuredProxyHops : 1);
 
 const FAZER_API = "https://api.fzr.cards/api/v2";
 const DEFAULT_USD_TO_SDG = 8900;
@@ -63,7 +67,10 @@ function parseCookies(req) {
     if (i < 0) continue;
     const key = part.slice(0, i).trim();
     const val = part.slice(i + 1).trim();
-    if (key) out[key] = decodeURIComponent(val);
+    if (key) {
+      try { out[key] = decodeURIComponent(val); }
+      catch (_) { out[key] = ""; }
+    }
   }
   return out;
 }
@@ -188,8 +195,15 @@ async function initDatabase() {
     throw new Error("store_settings.settings_json is not a JSON object; refusing to replace settings.");
   }
   storeSettings = settingResult.rows[0].settings_json;
+  const savedCatalog = storeSettings.catalogSnapshot?.products;
+  if (storeCore.catalogIsValid(savedCatalog)) {
+    pricedCatalogCache = savedCatalog;
+    pricedCatalogBuiltAt = Date.now();
+    console.log(`[CATALOG] Restored ${savedCatalog.length} products from PostgreSQL snapshot`);
+  }
   storeSettingsReady = true;
   await dbPool.query("DELETE FROM sessions WHERE expires_at < NOW()");
+  databaseReady = true;
   console.log("[DB] PostgreSQL ready");
   return true;
 }
@@ -238,11 +252,16 @@ function requireDatabase(res) {
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const STORE_SETTINGS_VERSION = 1;
+const FAZER_MIN_REQUEST_INTERVAL_MS = 550;
 
 let pricedCatalogCache = null;
 let pricedCatalogBuiltAt = 0;
 let priceRefreshPromise = null;
+let fazerRequestQueue = Promise.resolve();
+let fazerLastRequestStartedAt = 0;
+let catalogLastRefreshOk = false;
 let storeSettingsReady = false;
+let databaseReady = false;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
@@ -281,6 +300,7 @@ async function fazerFetch(endpoint, options = {}) {
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
+      await scheduleFazerRequest();
       const normalizedEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
       const response = await fetch(`${FAZER_API}${normalizedEndpoint}`, {
         ...options,
@@ -319,20 +339,34 @@ async function fazerGet(endpoint, timeoutMs = 30000) {
   return fazerFetch(endpoint, { method: "GET", timeoutMs });
 }
 
-async function getAllCategories(endpoint) {
+function scheduleFazerRequest() {
+  const scheduled = fazerRequestQueue.then(async () => {
+    const waitMs = Math.max(0, FAZER_MIN_REQUEST_INTERVAL_MS - (Date.now() - fazerLastRequestStartedAt));
+    if (waitMs) await sleep(waitMs);
+    fazerLastRequestStartedAt = Date.now();
+  });
+  fazerRequestQueue = scheduled.catch(() => {});
+  return scheduled;
+}
+
+async function getAllCategories(endpoint, extraParams = {}) {
   const items = [];
   let cursor = null;
   for (let page = 0; page < 100; page++) {
     const params = new URLSearchParams();
     params.set("limit", "50");
+    for (const [key, value] of Object.entries(extraParams)) params.set(key, String(value));
     if (cursor) params.set("cursor", cursor);
 
     const data = await fazerGet(`${endpoint}?${params.toString()}`);
+    if (!hasArrayResponse(data, ["items", "categories", "games"])) throw new Error(`Unexpected Fazer category response for ${endpoint}`);
     const pageItems = getArray(data, ["items", "categories", "games"]);
     if (pageItems.length) items.push(...pageItems);
 
     const nextCursor = data?.meta?.next_cursor || data?.next_cursor || data?.pagination?.next_cursor || null;
+    if (!nextCursor && data?.meta?.has_more === true) throw new Error(`Fazer reported more ${endpoint} categories without a continuation cursor`);
     if (!nextCursor) break;
+    if (page === 99) throw new Error(`Fazer category pagination exceeded the safety limit for ${endpoint}`);
     cursor = nextCursor;
   }
   return items;
@@ -347,14 +381,20 @@ function getArray(data, keys = ["items", "offers", "cards"]) {
   return [];
 }
 
+function hasArrayResponse(data, keys) {
+  return Array.isArray(data) || keys.some(key => Array.isArray(data?.[key])) || Array.isArray(data?.data);
+}
+
 const DEFAULT_STORE_SETTINGS = {
   version: STORE_SETTINGS_VERSION,
   catalogMode: "all",
   publishedIds: [],
   hiddenIds: [],
+  categoryRules: {},
   discounts: {},
   pricing: {
     usdToSdg: DEFAULT_USD_TO_SDG,
+    priceOverrides: {},
     tiers: [
       { maxCost: 20000, markup: 0.07 },
       { maxCost: 100000, markup: 0.08 },
@@ -378,7 +418,7 @@ function mergeSettings(current, patch) {
   return merged;
 }
 
-async function saveStoreSettings(settings) {
+async function updateStoreSettings(mutator) {
   if (!dbPool) throw new Error("Database is not configured");
   const client = await dbPool.connect();
   try {
@@ -391,7 +431,8 @@ async function saveStoreSettings(settings) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
       throw new Error("store_settings.settings_json is not a JSON object; refusing to save.");
     }
-    const next = mergeSettings(current, settings);
+    const next = await mutator(JSON.parse(JSON.stringify(current)));
+    if (!next || typeof next !== "object" || Array.isArray(next)) throw new Error("Settings update must produce an object.");
     const updated = await client.query(
       "UPDATE store_settings SET settings_json = $1::jsonb, updated_at = NOW() WHERE id = $2 RETURNING settings_json",
       [JSON.stringify(next), currentResult.rows[0].id]
@@ -409,6 +450,10 @@ async function saveStoreSettings(settings) {
   }
 }
 
+async function saveStoreSettings(settings) {
+  return updateStoreSettings(current => mergeSettings(current, settings));
+}
+
 function getPricingConfig() {
   const pricing = storeSettings?.pricing || DEFAULT_STORE_SETTINGS.pricing;
   return {
@@ -420,31 +465,15 @@ function getPricingConfig() {
 
 function getMarkupForCost(costSdg) {
   const pricing = getPricingConfig();
-  const tier = pricing.tiers.find(item => {
-    const max = item.maxCost == null ? Infinity : Number(item.maxCost);
-    return costSdg <= max;
-  });
-  return tier ? Number(tier.markup) : 0.10;
+  return storeCore.markupForCost(costSdg, pricing.tiers);
 }
 
 function roundCommercialPrice(value) {
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const r = getPricingConfig().rounding;
-  let step;
-  if (value < 10000) step = Number(r.under10000) || 100;
-  else if (value < 100000) step = Number(r.from10000To100000) || 500;
-  else if (value < 500000) step = Number(r.from100000To500000) || 1000;
-  else step = Number(r.from500000) || 5000;
-  return Math.ceil(value / step) * step;
+  return storeCore.roundCommercialPrice(value, getPricingConfig().rounding);
 }
 
 function calculateSalePrice(priceUsd) {
-  const usd = Number(priceUsd);
-  if (!Number.isFinite(usd) || usd <= 0) return null;
-  const pricing = getPricingConfig();
-  const costSdg = usd * pricing.usdToSdg;
-  const markup = getMarkupForCost(costSdg);
-  return roundCommercialPrice(costSdg * (1 + markup));
+  return storeCore.calculateSalePrice(priceUsd, getPricingConfig());
 }
 
 function offerPriceUsd(offer) {
@@ -467,86 +496,182 @@ function productVisibility(product) {
   return true;
 }
 
+function categoryRuleFor(product) {
+  const categoryId = String(product?.category_id || "");
+  return storeSettings.categoryRules?.[categoryId] || catalogConfig.catalog?.categoryRules?.[categoryId] || {};
+}
+
+function currentPricedProduct(product) {
+  const cost = Number(product?._cost_usd);
+  const basePrice = Number.isFinite(cost) && cost > 0
+    ? calculateSalePrice(cost)
+    : Number(product?.base_price_sdg ?? product?.price_sdg);
+  return storeCore.applyProductSettings({ ...product, price_sdg: basePrice, base_price_sdg: basePrice }, {
+    ...storeSettings,
+    categoryRules: { ...(catalogConfig.catalog?.categoryRules || {}), ...(storeSettings.categoryRules || {}) }
+  });
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function buildPricedCatalog() {
   console.log("[PRICE CACHE] Building complete catalog...");
+  catalogLastRefreshOk = false;
   const products = [];
-  const safeCatalogRead = async (loader) => {
-    try { await loader(); } catch (error) { console.error("[CATALOG] Provider catalog section unavailable:", safeDiagnostic(error.message)); }
-  };
-  await safeCatalogRead(async () => {
-    const categories = await getAllCategories("topups");
+  const previous = Array.isArray(storeSettings.catalogSnapshot?.products)
+    ? storeSettings.catalogSnapshot.products : (pricedCatalogCache || []);
+  let complete = true;
+
+  async function readFamily(type, loader) {
+    try {
+      const familyProducts = await loader();
+      products.push(...familyProducts);
+    } catch (error) {
+      if (Number(error?.status) === 403) {
+        // Fazer documents 403 as a service that is not enabled on the reseller account.
+        const savedFamily = previous.filter(product => product.type === type);
+        products.push(...savedFamily);
+        console.warn(`[CATALOG] ${type} is not enabled; retaining ${savedFamily.length} saved products`);
+        return;
+      }
+      complete = false;
+      console.error(`[CATALOG] ${type} source unavailable:`, safeDiagnostic(error.message));
+    }
+  }
+
+  function providerImage(...records) {
+    const candidates = [];
+    for (const record of records) {
+      if (!record || typeof record !== "object") continue;
+      const ui = record.ui && typeof record.ui === "object" ? record.ui : {};
+      const images = record.images && typeof record.images === "object" ? record.images : {};
+      candidates.push(record.cover_url, record.coverUrl, record.image_url, record.imageUrl,
+        record.icon_url, record.iconUrl, record.image, record.cover,
+        ui.cover_url, ui.coverUrl, ui.image_url, ui.image, ui.cover,
+        images.cover, images.icon, images.thumbnail);
+    }
+    for (const value of candidates) {
+      const safe = storeCore.safeProviderImageUrl(value);
+      if (safe) return safe;
+    }
+    return "";
+  }
+
+  await readFamily("topup", async () => {
+    const family = [];
+    const categories = await getAllCategories("topups", { include_ui: "true" });
     for (const category of categories) {
       const categoryId = String(category.category_id || category.id || "");
       if (!categoryId) continue;
-      try {
-        const response = await fazerGet(`/topups/offers?category_id=${encodeURIComponent(categoryId)}`);
-        const offers = getArray(response, ["offers", "items"]);
-        for (const offer of offers) {
-          const offerId = String(offer.offer_id || offer.id || "");
-          if (!offerId) continue;
-          const priceUsd = offerPriceUsd(offer);
-          products.push({ id: `topup__${categoryId}__${offerId}`, category_id: categoryId,
-            offer_id: offerId, name: `${category.name || category.title || categoryId} — ${offerLabel(offer)}`,
-            type: "topup", price_sdg: calculateSalePrice(priceUsd), fields: response.fields || category.fields || [] });
-        }
-      } catch (error) { console.error("[CATALOG] Top-up category unavailable:", safeDiagnostic(error.message)); }
+      const response = await fazerGet(`/topups/offers?category_id=${encodeURIComponent(categoryId)}`);
+      if (!hasArrayResponse(response, ["offers", "items"])) throw new Error("Unexpected Fazer top-up response");
+      for (const offer of getArray(response, ["offers", "items"])) {
+        const offerId = String(offer.offer_id || offer.id || "");
+        if (!offerId) continue;
+        const priceUsd = offerPriceUsd(offer);
+        const basePrice = calculateSalePrice(priceUsd);
+        family.push({ id: `topup__${categoryId}__${offerId}`, category_id: categoryId, category_name: String(category.name || category.title || categoryId),
+          _cost_usd: priceUsd, offer_id: offerId, name: `${category.name || category.title || categoryId} — ${offerLabel(offer)}`,
+          type: "topup", price_sdg: basePrice, base_price_sdg: basePrice,
+          image_url: providerImage(offer, response, category), fields: response.fields || category.fields || [] });
+      }
       await sleep(100);
     }
+    return family;
   });
-  await safeCatalogRead(async () => {
+
+  await readFamily("giftcard", async () => {
+    const family = [];
     const categories = await getAllCategories("giftcards");
     for (const category of categories) {
       const categoryId = String(category.category_id || category.id || "");
       if (!categoryId) continue;
-      try {
-        const response = await fazerGet(`/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`);
-        for (const card of getArray(response, ["offers", "cards", "items"])) {
-          const cardId = String(card.card_id || card.id || "");
-          if (!cardId) continue;
-          products.push({ id: `giftcard__${categoryId}__${cardId}`, category_id: categoryId, card_id: cardId,
-            name: `${category.name || response.name || categoryId} — ${offerLabel(card)}`, type: "giftcard",
-            price_sdg: calculateSalePrice(offerPriceUsd(card)), fields: [],
-            max_quantity: Number(card.max_order_quantity) || 100,
-            stock: card.stock == null ? null : Number(card.stock) });
-        }
-      } catch (error) { console.error("[CATALOG] Gift card category unavailable:", safeDiagnostic(error.message)); }
+      const response = await fazerGet(`/giftcards/cards?category_id=${encodeURIComponent(categoryId)}`);
+      if (!hasArrayResponse(response, ["offers", "cards", "items"])) throw new Error("Unexpected Fazer gift card response");
+      for (const card of getArray(response, ["offers", "cards", "items"])) {
+        const cardId = String(card.card_id || card.id || "");
+        if (!cardId) continue;
+        const priceUsd = offerPriceUsd(card);
+        const basePrice = calculateSalePrice(priceUsd);
+        family.push({ id: `giftcard__${categoryId}__${cardId}`, category_id: categoryId, category_name: String(category.name || response.name || categoryId),
+          card_id: cardId, _cost_usd: priceUsd, name: `${category.name || response.name || categoryId} — ${offerLabel(card)}`,
+          type: "giftcard", price_sdg: basePrice, base_price_sdg: basePrice,
+          image_url: providerImage(card, response, category), fields: [],
+          max_quantity: Number(card.max_order_quantity) || 100, stock: card.stock == null ? null : Number(card.stock) });
+      }
       await sleep(100);
     }
+    return family;
   });
-  await safeCatalogRead(async () => {
+
+  await readFamily("gamekey", async () => {
+    const family = [];
     const categories = await getAllCategories("gamekeys");
     for (const category of categories) {
-      const gameId = String(category.game_id || "");
+      const gameId = String(category.game_id || category.id || "");
       if (!gameId) continue;
-      try {
-        const response = await fazerGet(`/gamekeys/keys?game_id=${encodeURIComponent(gameId)}`);
-        for (const key of getArray(response, ["keys", "items"])) {
-          const keyId = String(key.key_id || key.id || "");
-          if (!keyId) continue;
-          products.push({ id: `gamekey__${gameId}__${keyId}`, game_id: gameId, key_id: keyId,
-            name: `${category.name || response.GameName || gameId} — ${offerLabel(key)}`, type: "gamekey",
-            price_sdg: calculateSalePrice(offerPriceUsd(key)), fields: [],
-            max_quantity: Number(key.max_order_quantity) || 100,
-            stock: key.stock == null ? null : Number(key.stock) });
-        }
-      } catch (error) { console.error("[CATALOG] Game key category unavailable:", safeDiagnostic(error.message)); }
+      const response = await fazerGet(`/gamekeys/keys?game_id=${encodeURIComponent(gameId)}`);
+      if (!hasArrayResponse(response, ["keys", "items"])) throw new Error("Unexpected Fazer game key response");
+      for (const key of getArray(response, ["keys", "items"])) {
+        const keyId = String(key.key_id || key.id || "");
+        if (!keyId) continue;
+        const priceUsd = offerPriceUsd(key);
+        const basePrice = calculateSalePrice(priceUsd);
+        family.push({ id: `gamekey__${gameId}__${keyId}`, category_id: gameId, category_name: String(category.name || response.GameName || gameId),
+          game_id: gameId, key_id: keyId, _cost_usd: priceUsd, name: `${category.name || response.GameName || gameId} — ${offerLabel(key)}`,
+          type: "gamekey", price_sdg: basePrice, base_price_sdg: basePrice,
+          image_url: providerImage(key, response, category), fields: [],
+          max_quantity: Number(key.max_order_quantity) || 100, stock: key.stock == null ? null : Number(key.stock) });
+      }
       await sleep(100);
     }
+    return family;
   });
 
-  pricedCatalogCache = products;
+  const unique = new Map();
+  for (const product of products) {
+    if (!product.id || !Number.isFinite(Number(product.base_price_sdg)) || Number(product.base_price_sdg) <= 0 || unique.has(product.id)) {
+      complete = false;
+      continue;
+    }
+    unique.set(product.id, product);
+  }
+  if (!complete || !storeCore.catalogIsValid([...unique.values()])) {
+    if (pricedCatalogCache?.length) {
+      console.warn("[CATALOG] Refresh was incomplete; retaining last known good catalog.");
+      pricedCatalogBuiltAt = Date.now();
+      return pricedCatalogCache;
+    }
+    throw new Error("Fazer catalog refresh was empty or incomplete; no valid catalog is available.");
+  }
+
+  const nextCatalog = [...unique.values()];
+  if (dbPool && storeSettingsReady) {
+    try {
+      await saveStoreSettings({ catalogSnapshot: { version: 1, updatedAt: new Date().toISOString(), products: nextCatalog } });
+    } catch (error) {
+      if (pricedCatalogCache?.length) {
+        console.error("[CATALOG] Could not persist refresh; retaining last known good catalog:", safeDiagnostic(error.message));
+        return pricedCatalogCache;
+      }
+      throw new Error("Fazer catalog was fetched but could not be saved to PostgreSQL.");
+    }
+  }
+  pricedCatalogCache = nextCatalog;
   pricedCatalogBuiltAt = Date.now();
-  return products;
+  catalogLastRefreshOk = true;
+  return pricedCatalogCache;
 }
 
-async function getPricedCatalog() {
-  if (pricedCatalogCache && (Date.now() - pricedCatalogBuiltAt < CACHE_TTL_MS)) {
+async function getPricedCatalog(forceRefresh = false) {
+  if (!forceRefresh && pricedCatalogCache && (Date.now() - pricedCatalogBuiltAt < CACHE_TTL_MS)) {
     return pricedCatalogCache;
   }
-  if (priceRefreshPromise) return priceRefreshPromise;
-  priceRefreshPromise = buildPricedCatalog().finally(() => { priceRefreshPromise = null; });
+  if (!priceRefreshPromise) priceRefreshPromise = buildPricedCatalog().finally(() => { priceRefreshPromise = null; });
+  if (pricedCatalogCache && !forceRefresh) {
+    priceRefreshPromise.catch(error => console.error("[CATALOG] Background refresh failed:", safeDiagnostic(error.message)));
+    return pricedCatalogCache;
+  }
   return priceRefreshPromise;
 }
 
@@ -555,17 +680,20 @@ async function getPricedCatalog() {
 // ======================================================
 
 function verifyAdminKey(key) {
-  const adminKey = process.env.ADMIN_KEY;
-  if (!adminKey || !key) return false;
-  const expected = Buffer.from(String(adminKey));
-  const supplied = Buffer.from(String(key));
-  return expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
+  return storeCore.adminKeyMatches(process.env.ADMIN_KEY, key);
 }
 
 function requireAdmin(req, res, next) {
   if (!process.env.ADMIN_KEY) return res.status(503).json({ ok: false, error: "Admin access is not configured." });
-  if (!verifyAdminKey(req.headers["x-admin-key"])) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  const cookieValid = storeCore.verifyAdminSessionToken(process.env.ADMIN_KEY, parseCookies(req).abeshaadmin);
+  if (!cookieValid && !verifyAdminKey(req.headers["x-admin-key"])) return res.status(401).json({ ok: false, error: "Unauthorized" });
   next();
+}
+
+function setAdminCookie(res, key) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const token = storeCore.createAdminSessionToken(key);
+  res.setHeader("Set-Cookie", `abeshaadmin=${encodeURIComponent(token)}; Max-Age=1800; Path=/api/admin; HttpOnly; SameSite=Strict${secure}`);
 }
 
 app.post("/api/admin/login", (req, res) => {
@@ -576,6 +704,7 @@ app.post("/api/admin/login", (req, res) => {
   const inputKey = adminKey || key || password;
 
   if (verifyAdminKey(inputKey)) {
+    setAdminCookie(res, String(inputKey));
     return res.json({ ok: true, message: "تم تسجيل الدخول بنجاح" });
   }
 
@@ -585,7 +714,8 @@ app.post("/api/admin/login", (req, res) => {
 app.get("/api/admin/settings", requireAdmin, (req, res) => {
   if (!storeSettingsReady) return res.status(503).json({ ok: false, error: "Persistent settings are unavailable." });
   res.setHeader("Content-Type", "application/json");
-  res.json({ ok: true, settings: storeSettings });
+  const { catalogSnapshot, ...settings } = storeSettings;
+  res.json({ ok: true, settings });
 });
 
 app.post("/api/admin/settings", requireAdmin, async (req, res) => {
@@ -595,11 +725,95 @@ app.post("/api/admin/settings", requireAdmin, async (req, res) => {
   }
   try {
     const settings = await saveStoreSettings({ pricing: { usdToSdg: rate } });
-    pricedCatalogCache = null;
-    return res.json({ ok: true, settings });
+    if (pricedCatalogCache) {
+      pricedCatalogCache = pricedCatalogCache.map(product => {
+        const basePrice = calculateSalePrice(product._cost_usd);
+        return { ...product, price_sdg: basePrice, base_price_sdg: basePrice };
+      });
+      pricedCatalogBuiltAt = Date.now();
+    }
+    const { catalogSnapshot, ...safeSettings } = settings;
+    return res.json({ ok: true, settings: safeSettings });
   } catch (error) {
     console.error("[SETTINGS] Database save failed:", safeDiagnostic(error.message));
     return res.status(503).json({ ok: false, error: "Could not save settings." });
+  }
+});
+
+app.get("/api/admin/products", requireAdmin, async (req, res) => {
+  if (!storeSettingsReady) return res.status(503).json({ ok: false, error: "Persistent settings are unavailable." });
+  try {
+    const products = await getPricedCatalog();
+    res.json({ ok: true, total: products.length, products: products.map(product => ({
+      ...currentPricedProduct(product), cost_usd: Number(product._cost_usd),
+      visible: productVisibility(product)
+    })) });
+  } catch (error) {
+    res.status(error.status || 503).json({ ok: false, error: "تعذر تحميل كتالوج الإدارة حاليًا." });
+  }
+});
+
+app.post("/api/admin/products/:productId/settings", requireAdmin, async (req, res) => {
+  if (!storeSettingsReady) return res.status(503).json({ ok: false, error: "Persistent settings are unavailable." });
+  try {
+    const catalog = await getPricedCatalog();
+    const product = catalog.find(item => item.id === req.params.productId);
+    if (!product) return res.status(404).json({ ok: false, error: "Product not found in the current catalog." });
+    const body = req.body || {};
+    const categoryOptions = new Set(["mobile", "game", "gift", "subscription", "steam", "other"]);
+    if (body.visible !== undefined && typeof body.visible !== "boolean") return res.status(400).json({ ok: false, error: "Visibility value is invalid." });
+    if (body.storeCategory !== undefined && !categoryOptions.has(String(body.storeCategory))) return res.status(400).json({ ok: false, error: "Product category is invalid." });
+    if (body.religiousDisclaimer !== undefined && (typeof body.religiousDisclaimer !== "boolean" || product.type !== "topup")) {
+      return res.status(400).json({ ok: false, error: "The notice can only be set for a Fazer top-up category." });
+    }
+    if (body.priceOverride !== undefined && body.priceOverride !== null && (!Number.isFinite(Number(body.priceOverride)) || Number(body.priceOverride) <= 0 || Number(body.priceOverride) > 1000000000000)) {
+      return res.status(400).json({ ok: false, error: "Manual price must be a positive number." });
+    }
+    if (body.discountPercent !== undefined && body.discountPercent !== null && (!Number.isFinite(Number(body.discountPercent)) || Number(body.discountPercent) < 0 || Number(body.discountPercent) > 90)) {
+      return res.status(400).json({ ok: false, error: "Discount must be between 0 and 90 percent." });
+    }
+
+    const saved = await updateStoreSettings(current => {
+      current.hiddenIds = Array.isArray(current.hiddenIds) ? current.hiddenIds : [];
+      if (body.visible === true) current.hiddenIds = current.hiddenIds.filter(id => id !== product.id);
+      if (body.visible === false && !current.hiddenIds.includes(product.id)) current.hiddenIds.push(product.id);
+      current.categoryRules = current.categoryRules && typeof current.categoryRules === "object" ? current.categoryRules : {};
+      const categoryId = String(product.category_id || "");
+      if (categoryId && (body.storeCategory !== undefined || body.religiousDisclaimer !== undefined)) {
+        const rule = { ...(current.categoryRules[categoryId] || {}) };
+        if (body.storeCategory !== undefined) rule.storeCategory = String(body.storeCategory);
+        if (body.religiousDisclaimer !== undefined) rule.religiousDisclaimer = body.religiousDisclaimer;
+        current.categoryRules[categoryId] = rule;
+      }
+      current.pricing = current.pricing && typeof current.pricing === "object" ? current.pricing : {};
+      current.pricing.priceOverrides = current.pricing.priceOverrides && typeof current.pricing.priceOverrides === "object" ? current.pricing.priceOverrides : {};
+      current.discounts = current.discounts && typeof current.discounts === "object" ? current.discounts : {};
+      if (body.priceOverride !== undefined) {
+        if (body.priceOverride === null) delete current.pricing.priceOverrides[product.id];
+        else current.pricing.priceOverrides[product.id] = Math.round(Number(body.priceOverride));
+      }
+      if (body.discountPercent !== undefined) {
+        if (body.discountPercent === null || Number(body.discountPercent) === 0) delete current.discounts[product.id];
+        else current.discounts[product.id] = Number(body.discountPercent);
+      }
+      return current;
+    });
+    const updated = currentPricedProduct(product);
+    res.json({ ok: true, product: { ...updated, visible: productVisibility(product) }, settingsUpdated: Boolean(saved) });
+  } catch (error) {
+    console.error("[ADMIN] Product settings save failed:", safeDiagnostic(error.message));
+    res.status(503).json({ ok: false, error: "Could not save product settings." });
+  }
+});
+
+app.post("/api/admin/catalog/refresh", requireAdmin, async (req, res) => {
+  if (!getFazerApiKey()) return res.status(503).json({ ok: false, error: "Fazer API key is not configured; the saved catalog remains available." });
+  try {
+    const products = await getPricedCatalog(true);
+    if (!catalogLastRefreshOk) return res.status(503).json({ ok: false, total: products.length, staleCatalogKept: products.length > 0, error: "تعذر تحديث Fazer؛ أبقينا آخر نسخة محفوظة دون تغيير." });
+    res.json({ ok: true, total: products.length, updatedAt: new Date(pricedCatalogBuiltAt).toISOString() });
+  } catch (error) {
+    res.status(error.status || 503).json({ ok: false, error: "تعذر تحديث الكتالوج. احتفظنا بآخر نسخة محفوظة إن وجدت." });
   }
 });
 
@@ -607,16 +821,20 @@ app.post("/api/admin/settings", requireAdmin, async (req, res) => {
 // المسارات العامة (PUBLIC API & ROUTES)
 // ======================================================
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ ok: true, status: "healthy", timestamp: new Date().toISOString() });
+app.get("/health", async (req, res) => {
+  let ready = Boolean(dbPool && databaseReady && storeSettingsReady);
+  if (ready) {
+    try { await dbPool.query({ text: "SELECT 1", statement_timeout: 3000 }); }
+    catch (_) { ready = false; }
+  }
+  res.status(ready ? 200 : 503).json({ ok: ready, status: ready ? "healthy" : "not_ready", timestamp: new Date().toISOString() });
 });
 
 app.get("/api/products", async (req, res) => {
   try {
-    requireFazerKey();
     const products = await getPricedCatalog();
-    const visible = products.filter(productVisibility).filter(p => Number(p.price_sdg) > 0);
-    res.json({ ok: true, total: visible.length, products: visible });
+    const visible = products.filter(productVisibility).map(currentPricedProduct).filter(p => Number(p.price_sdg) > 0);
+    res.json({ ok: true, total: visible.length, updatedAt: new Date(pricedCatalogBuiltAt).toISOString(), products: visible.map(({ _cost_usd, ...product }) => product) });
   } catch (error) {
     res.status(error.status || 503).json({ ok: false, error: "تعذر تحميل المنتجات حاليًا." });
   }
@@ -778,9 +996,27 @@ app.post("/api/orders", requireCustomer, async (req, res) => {
   }
   const reference = String(paymentReference || "").trim();
   if (!reference || reference.length > 120) return res.status(400).json({ ok: false, error: "Enter the payment reference." });
+  const requestKey = String(req.get("Idempotency-Key") || "");
+  if (requestKey && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestKey)) {
+    return res.status(400).json({ ok: false, error: "Invalid order retry key." });
+  }
+  const orderNumber = requestKey
+    ? storeCore.deterministicOrderNumber(req.customer.id, requestKey)
+    : `ABS-${Date.now()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
   try {
-    const catalog = await getPricedCatalog();
+    if (requestKey) {
+      const prior = await dbPool.query("SELECT * FROM orders WHERE order_number=$1 AND customer_id=$2", [orderNumber, req.customer.id]);
+      if (prior.rows[0]) {
+        const priorItems = await dbPool.query("SELECT product_id, quantity, fields_json FROM order_items WHERE order_id=$1 ORDER BY id", [prior.rows[0].id]);
+        const existing = prior.rows[0];
+        if (!storeCore.sameOrderIntent(existing, priorItems.rows, { items, paymentMethod, paymentReference: reference, note })) {
+          return res.status(409).json({ ok: false, error: "مفتاح إعادة المحاولة مرتبط بطلب مختلف." });
+        }
+        return res.json({ ok: true, order: frontendOrder(existing), replayed: true });
+      }
+    }
+    const catalog = (await getPricedCatalog()).map(currentPricedProduct);
     const prepared = items.map(input => {
       const product = catalog.find(item => item.id === String(input?.productId || "") && productVisibility(item));
       if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Order item is invalid.");
@@ -805,11 +1041,14 @@ app.post("/api/orders", requireCustomer, async (req, res) => {
 
     const total = prepared.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
     if (!Number.isFinite(total) || total <= 0) throw new Error("Order total is invalid.");
+    const expectedTotal = Number(req.body?.expectedTotal);
+    if (Number.isFinite(expectedTotal) && Math.abs(expectedTotal - total) > 0.01) {
+      return res.status(409).json({ ok: false, error: "تغير سعر منتج أو إجمالي الطلب. راجع الإجمالي الجديد قبل المتابعة.", total });
+    }
     const client = await dbPool.connect();
     let order;
     try {
       await client.query("BEGIN");
-      const orderNumber = `ABS-${Date.now()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
       const created = await client.query(`
         INSERT INTO orders (order_number, customer_id, customer_name, customer_phone, status,
           payment_method, payment_status, payment_reference, customer_note, total_sdg)
@@ -832,6 +1071,20 @@ app.post("/api/orders", requireCustomer, async (req, res) => {
     } finally { client.release(); }
     return res.status(201).json({ ok: true, order: frontendOrder(order) });
   } catch (error) {
+    if (requestKey && error.code === "23505") {
+      try {
+        const prior = await dbPool.query("SELECT * FROM orders WHERE order_number=$1 AND customer_id=$2", [orderNumber, req.customer.id]);
+        if (prior.rows[0]) {
+          const priorItems = await dbPool.query("SELECT product_id, quantity, fields_json FROM order_items WHERE order_id=$1 ORDER BY id", [prior.rows[0].id]);
+          if (storeCore.sameOrderIntent(prior.rows[0], priorItems.rows, { items, paymentMethod, paymentReference: reference, note })) {
+            return res.json({ ok: true, order: frontendOrder(prior.rows[0]), replayed: true });
+          }
+          return res.status(409).json({ ok: false, error: "مفتاح إعادة المحاولة مرتبط بطلب مختلف." });
+        }
+      } catch (lookupError) {
+        console.error("[ORDER] Retry lookup failed:", safeDiagnostic(lookupError.message));
+      }
+    }
     if (error.message && /unavailable|quantity|fields|provide|fulfilled|invalid|exceeds/.test(error.message)) {
       return res.status(400).json({ ok: false, error: error.message });
     }
@@ -856,7 +1109,8 @@ async function executeFulfillmentItem(itemId, retry = false) {
       fulfillment_status = $4, idempotency_key = COALESCE(idempotency_key, $2),
       execution_attempts = execution_attempts + 1, last_execution_error = NULL,
       fulfillment_started_at = COALESCE(fulfillment_started_at, NOW()), fulfillment_last_attempt_at = NOW()
-    WHERE id = $1 AND (fulfillment_status = ANY($3::varchar[]) OR
+    WHERE id = $1 AND EXISTS (SELECT 1 FROM orders o WHERE o.id=order_items.order_id AND o.payment_status='CONFIRMED') AND
+      (fulfillment_status = ANY($3::varchar[]) OR
       ($5::boolean AND fulfillment_status IN ('SUBMITTING','RETRYING') AND fulfillment_last_attempt_at < NOW() - INTERVAL '2 minutes'))
     RETURNING id, order_id, fields_json, quantity, fulfillment_started_at, idempotency_key`,
     [itemId, key, eligible, retry ? "RETRYING" : "SUBMITTING", retry]);
@@ -962,9 +1216,13 @@ app.post("/api/admin/orders/:orderId/confirm-payment", requireAdmin, async (req,
 app.post("/api/admin/order-items/:itemId/retry", requireAdmin, async (req, res) => {
   if (!requireDatabase(res)) return;
   try {
-    const item = await dbPool.query("SELECT id, order_id, fulfillment_status, fulfillment_started_at, fulfillment_last_attempt_at FROM order_items WHERE id=$1", [req.params.itemId]);
+    const item = await dbPool.query(`SELECT i.id, i.order_id, i.fulfillment_status, i.fulfillment_started_at,
+      i.fulfillment_last_attempt_at, i.idempotency_key, o.payment_status
+      FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.id=$1`, [req.params.itemId]);
     const row = item.rows[0];
     if (!row) return res.status(404).json({ ok: false, error: "Order item not found." });
+    if (row.payment_status !== "CONFIRMED") return res.status(409).json({ ok: false, error: "Payment must be confirmed before fulfillment." });
+    if (!row.idempotency_key) return res.status(409).json({ ok: false, error: "No saved Fazer retry key exists; verify the provider order before retrying." });
     if (!["FAILED", "SUBMITTING", "RETRYING"].includes(row.fulfillment_status)) return res.status(409).json({ ok: false, error: "This item is not eligible for a safe retry." });
     const ageMs = row.fulfillment_started_at ? Date.now() - new Date(row.fulfillment_started_at).getTime() : Infinity;
     if (ageMs > 6 * 24 * 60 * 60 * 1000) {
@@ -1026,10 +1284,28 @@ app.use("/api/*", (req, res) => {
 
 async function resumePendingFulfillments() {
   if (!dbPool) return;
-  const pending = await dbPool.query("SELECT id FROM order_items WHERE fulfillment_status='PAYMENT_CONFIRMED' ORDER BY id LIMIT 50");
-  for (const row of pending.rows) {
-    try { await executeFulfillmentItem(row.id); }
-    catch (error) { console.error("[FAZER] Pending fulfillment recovery failed:", safeDiagnostic(error.message)); }
+  let afterId = 0;
+  while (true) {
+    const pending = await dbPool.query("SELECT id FROM order_items WHERE fulfillment_status='PAYMENT_CONFIRMED' AND id>$1 ORDER BY id LIMIT 50", [afterId]);
+    if (!pending.rows.length) break;
+    for (const row of pending.rows) {
+      afterId = Number(row.id);
+      try { await executeFulfillmentItem(row.id); }
+      catch (error) { console.error("[FAZER] Pending fulfillment recovery failed:", safeDiagnostic(error.message)); }
+    }
+  }
+  afterId = 0;
+  while (true) {
+    const uncertain = await dbPool.query(`SELECT i.id FROM order_items i JOIN orders o ON o.id=i.order_id
+      WHERE i.id>$1 AND i.fulfillment_status IN ('SUBMITTING','RETRYING') AND o.payment_status='CONFIRMED'
+      AND i.idempotency_key IS NOT NULL AND i.fulfillment_started_at > NOW() - INTERVAL '6 days'
+      AND i.fulfillment_last_attempt_at < NOW() - INTERVAL '2 minutes' ORDER BY i.id LIMIT 50`, [afterId]);
+    if (!uncertain.rows.length) break;
+    for (const row of uncertain.rows) {
+      afterId = Number(row.id);
+      try { await executeFulfillmentItem(row.id, true); }
+      catch (error) { console.error("[FAZER] Uncertain fulfillment recovery failed:", safeDiagnostic(error.message)); }
+    }
   }
 }
 
@@ -1048,5 +1324,12 @@ async function resumePendingFulfillments() {
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`ABESHA STORE running on port ${PORT}`);
     console.log(`Pricing USD -> SDG: ${getPricingConfig().usdToSdg}`);
+    if (getFazerApiKey()) {
+      getPricedCatalog(true).catch(error => console.error("[CATALOG] Startup refresh failed:", safeDiagnostic(error.message)));
+      const catalogTimer = setInterval(() => {
+        getPricedCatalog(true).catch(error => console.error("[CATALOG] Scheduled refresh failed:", safeDiagnostic(error.message)));
+      }, CACHE_TTL_MS);
+      catalogTimer.unref?.();
+    }
   });
 })();
