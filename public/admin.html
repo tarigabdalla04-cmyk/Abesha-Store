@@ -86,6 +86,15 @@
     .pricing-help { color:#b4c1cb }
     label { color:#c1d0da }
     button:focus-visible,input:focus-visible { outline:3px solid #55e3f0;outline-offset:3px }
+    .admin-toolbar { display:grid;grid-template-columns:1fr auto;gap:10px;margin:18px 0 }
+    .product-controls { display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:12px }
+    .product-controls label { display:block;font-size:12px;margin-bottom:4px }
+    .product-controls input,.product-controls select { width:100%;box-sizing:border-box;padding:9px;border-radius:8px;border:1px solid #294861;background:#071729;color:#edf2f5 }
+    .toggle-row { display:flex!important;align-items:center;gap:8px;padding-top:22px }
+    .toggle-row input { width:auto }
+    .product-image { max-width:84px;max-height:64px;object-fit:contain;border-radius:8px;float:left }
+    .gold-text { color:#e6c66f }
+    @media(max-width:560px) { body{padding:12px}.admin-toolbar{grid-template-columns:1fr}.product-controls{grid-template-columns:1fr 1fr}.toggle-row{padding-top:0} }
   </style>
 </head>
 
@@ -129,13 +138,11 @@
     <small class="pricing-help">الزيادة على التكلفة = الربح ÷ التكلفة. هامش الربح من سعر البيع = الربح ÷ سعر البيع؛ النسبتان مختلفتان. السعر المقترح يطبق شرائح المتجر والتقريب التجاري.</small>
   </section>
 
-  <input
-    id="search"
-    type="text"
-    placeholder="ابحث عن منتج..."
-    style="display:none;"
-    oninput="renderProducts()"
-  >
+  <div id="productToolbar" class="admin-toolbar" style="display:none">
+    <input id="search" type="search" placeholder="ابحث عن منتج أو فئة..." oninput="renderProducts()" aria-label="البحث في المنتجات">
+    <button id="refreshCatalogButton" type="button" onclick="refreshCatalog()">تحديث الكتالوج من Fazer</button>
+  </div>
+  <p id="productCount" class="pricing-help" aria-live="polite"></p>
 
   <div id="products"></div>
 
@@ -143,10 +150,13 @@
 
 <script>
 let products = [];
+let calculatorPricing = null;
+let adminSettings = {};
+let visibleProductCount = 100;
 
 function showAdminControls() {
   document.getElementById("loginBox").style.display = "none";
-  document.getElementById("search").style.display = "block";
+  document.getElementById("productToolbar").style.display = "grid";
   document.getElementById("adminControls").style.display = "block";
 }
 
@@ -179,7 +189,7 @@ async function loadCatalog() {
       throw new Error(loginData.error || "مفتاح الإدارة غير صحيح");
     }
 
-    sessionStorage.setItem("ABESHA_ADMIN_KEY", keyInput);
+    document.getElementById("adminKey").value = "";
 
     showAdminControls();
     document.getElementById("status").textContent = "تم التحقق. جارٍ تحميل بيانات الإدارة...";
@@ -190,21 +200,22 @@ async function loadCatalog() {
       : "تم تحميل " + products.length + " منتج بنجاح.";
 
   } catch (error) {
-    if (!sessionStorage.getItem("ABESHA_ADMIN_KEY")) document.getElementById("loginBox").style.display = "block";
+    document.getElementById("loginBox").style.display = "block";
     document.getElementById("status").textContent = "فشل الدخول: " + error.message;
   }
 }
 
 async function loadCatalogData() {
-  const response = await fetch("/api/products", { cache: "no-store" });
+  const response = await fetch("/api/admin/products", { cache: "no-store", credentials: "same-origin" });
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.error || "فشل جلب المنتجات");
   products = data.products || [];
+  document.getElementById("productCount").textContent = `الكتالوج يحتوي ${Number(data.total || products.length).toLocaleString("en-US")} منتجًا.`;
   renderProducts();
 }
 
 function adminHeaders(json = false) {
-  const headers = { "X-Admin-Key": sessionStorage.getItem("ABESHA_ADMIN_KEY") || "" };
+  const headers = {};
   if (json) headers["Content-Type"] = "application/json";
   return headers;
 }
@@ -213,7 +224,9 @@ async function loadSettings() {
   const response = await fetch("/api/admin/settings", { headers: adminHeaders(), cache: "no-store" });
   const data = await response.json();
   if (!response.ok || !data.ok) throw new Error(data.error || "تعذر تحميل الإعدادات");
-  document.getElementById("exchangeRate").value = data.settings?.pricing?.usdToSdg || "";
+  adminSettings = data.settings || {};
+  calculatorPricing = data.settings?.pricing || null;
+  document.getElementById("exchangeRate").value = calculatorPricing?.usdToSdg || "";
   calculatePrices();
 }
 
@@ -229,7 +242,51 @@ async function saveSettings() {
   });
   const data = await response.json();
   document.getElementById("status").textContent = response.ok && data.ok ? "تم حفظ سعر الصرف." : (data.error || "تعذر حفظ سعر الصرف.");
-  if (response.ok && data.ok) calculatePrices();
+  if (response.ok && data.ok) { adminSettings = data.settings || adminSettings; calculatorPricing = data.settings?.pricing || calculatorPricing; calculatePrices(); await loadCatalogData(); }
+}
+
+async function refreshCatalog() {
+  const button = document.getElementById("refreshCatalogButton");
+  button.disabled = true;
+  button.textContent = "جارٍ التحديث...";
+  try {
+    const response = await fetch("/api/admin/catalog/refresh", { method: "POST", credentials: "same-origin", headers: adminHeaders(true), body: "{}" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "تعذر تحديث الكتالوج");
+    document.getElementById("status").textContent = `تم تحديث ${Number(data.total).toLocaleString("en-US")} منتجًا وحفظ النسخة.`;
+    await loadCatalogData();
+  } catch (error) {
+    document.getElementById("status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = "تحديث الكتالوج من Fazer";
+  }
+}
+
+async function saveProductSettings(productId) {
+  const encodedId = encodeURIComponent(productId);
+  const product = products.find(item => item.id === productId);
+  if (!product) return;
+  const priceValue = document.getElementById(`override-${encodedId}`).value.trim();
+  const discountValue = document.getElementById(`discount-${encodedId}`).value.trim();
+  const payload = {
+    visible: document.getElementById(`visible-${encodedId}`).checked,
+    storeCategory: document.getElementById(`category-${encodedId}`).value,
+    priceOverride: priceValue ? Number(priceValue) : null,
+    discountPercent: discountValue ? Number(discountValue) : null
+  };
+  if (product.type === "topup") payload.religiousDisclaimer = document.getElementById(`disclaimer-${encodedId}`).checked;
+  try {
+    const response = await fetch(`/api/admin/products/${encodedId}/settings`, {
+      method: "POST", credentials: "same-origin", headers: adminHeaders(true), body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "تعذر حفظ إعدادات المنتج");
+    document.getElementById("status").textContent = `تم حفظ إعدادات ${product.name}.`;
+    await Promise.all([loadSettings(), loadCatalogData()]);
+  } catch (error) {
+    document.getElementById("status").textContent = error.message;
+  }
 }
 
 function calculatePrices() {
@@ -242,10 +299,12 @@ function calculatePrices() {
     return;
   }
   const cost = usd * rate;
-  const tiers = [{ max: 20000, markup: 0.07 }, { max: 100000, markup: 0.08 }, { max: 300000, markup: 0.09 }, { max: Infinity, markup: 0.10 }];
-  const markup = tiers.find(tier => cost <= tier.max).markup;
+  const tiers = Array.isArray(calculatorPricing?.tiers) && calculatorPricing.tiers.length === 4
+    ? calculatorPricing.tiers : [{ maxCost: 20000, markup: 0.07 }, { maxCost: 100000, markup: 0.08 }, { maxCost: 300000, markup: 0.09 }, { maxCost: null, markup: 0.10 }];
+  const markup = (tiers.find(tier => cost <= (tier.maxCost == null ? Infinity : Number(tier.maxCost))) || tiers[3]).markup;
   const proposedBase = cost * (1 + markup);
-  const step = proposedBase < 10000 ? 100 : proposedBase < 100000 ? 500 : proposedBase < 500000 ? 1000 : 5000;
+  const rounding = calculatorPricing?.rounding || {};
+  const step = proposedBase < 10000 ? Number(rounding.under10000) || 100 : proposedBase < 100000 ? Number(rounding.from10000To100000) || 500 : proposedBase < 500000 ? Number(rounding.from100000To500000) || 1000 : Number(rounding.from500000) || 5000;
   const proposed = Math.ceil(proposedBase / step) * step;
   const actualProfit = Number.isFinite(sale) && sale > 0 ? sale - cost : null;
   const actualMarkup = actualProfit !== null ? actualProfit / cost * 100 : null;
@@ -317,50 +376,41 @@ function renderProducts() {
   const filtered = products.filter(product => {
     const name = (product.name || "").toLowerCase();
     const id = (product.id || "").toLowerCase();
-    return name.includes(search) || id.includes(search);
+    const categoryName = (product.category_name || "").toLowerCase();
+    return name.includes(search) || id.includes(search) || categoryName.includes(search);
   });
 
-  document.getElementById("products").innerHTML = filtered.slice(0, 100).map(product => `
+  document.getElementById("productCount").textContent = `نتائج البحث: ${filtered.length.toLocaleString("en-US")}، المعروض: ${Math.min(visibleProductCount, filtered.length).toLocaleString("en-US")}.`;
+  document.getElementById("products").innerHTML = filtered.slice(0, visibleProductCount).map(product => `
     <div class="product">
+      ${product.image_url ? `<img class="product-image" src="${escapeHtml(product.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : ""}
       <strong>${escapeHtml(product.name || "")}</strong>
-      <div class="type">النوع: ${escapeHtml(product.type || "topup")}</div>
-      <div>ID: ${escapeHtml(product.id || "")}</div>
-      <div style="margin-top: 8px; font-weight: bold; color: #4CAF50;">
-        السعر النهائي: ${product.price_sdg ? Number(product.price_sdg).toLocaleString("en-US") + " SDG" : "غير متوفر"}
+      <div class="type">الفئة: ${escapeHtml(product.category_name || product.type || "غير مصنف")}</div>
+      <div>ID: <code>${escapeHtml(product.id || "")}</code></div>
+      <div style="margin-top:8px;font-weight:bold" class="gold-text">
+        السعر المعروض: ${Number(product.price_sdg).toLocaleString("en-US")} SDG ${product.discount_percent ? `<small>(خصم ${Number(product.discount_percent)}%)</small>` : ""}
       </div>
-      <button
-        data-product-details="${escapeHtml(product.id || "")}"
-        style="
-          margin-top:12px;
-          padding:10px 16px;
-          border-radius:8px;
-          border:1px solid #1976ff;
-          background:#0b3d78;
-          color:white;
-          cursor:pointer;
-        "
-      >
-        تفاصيل المنتج
-      </button>
+      <div class="pricing-help">تكلفة Fazer: ${Number(product.cost_usd || 0).toFixed(4)} USD | النوع التقني: ${escapeHtml(product.type || "غير محدد")}</div>
+      <div class="product-controls">
+        <div><label for="category-${encodeURIComponent(product.id)}">تصنيف المتجر</label><select id="category-${encodeURIComponent(product.id)}">
+          ${[["other","منتجات أخرى"],["mobile","شحن ألعاب"],["game","ألعاب ومفاتيح"],["gift","بطاقات هدايا"],["subscription","اشتراكات"],["steam","Steam"]].map(([value,label]) => `<option value="${value}" ${product.store_category === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select></div>
+        <div><label for="override-${encodeURIComponent(product.id)}">سعر ثابت اختياري (SDG)</label><input id="override-${encodeURIComponent(product.id)}" type="number" min="1" step="1" value="${escapeHtml(adminSettings.pricing?.priceOverrides?.[product.id] ?? "")}" placeholder="حسب التسعير"></div>
+        <div><label for="discount-${encodeURIComponent(product.id)}">خصم % (اختياري)</label><input id="discount-${encodeURIComponent(product.id)}" type="number" min="0" max="90" step="0.5" value="${escapeHtml(adminSettings.discounts?.[product.id] ?? "")}" placeholder="0"></div>
+        <label class="toggle-row"><input id="visible-${encodeURIComponent(product.id)}" type="checkbox" ${product.visible ? "checked" : ""}> ظاهر في المتجر</label>
+        ${product.type === "topup" ? `<label class="toggle-row"><input id="disclaimer-${encodeURIComponent(product.id)}" type="checkbox" ${adminSettings.categoryRules?.[product.category_id]?.religiousDisclaimer === true ? "checked" : ""}> إظهار التنبيه الشرعي لهذه الفئة</label>` : ""}
+      </div>
+      <button type="button" data-save-product="${escapeHtml(product.id)}">حفظ إعدادات المنتج والفئة</button>
     </div>
   `).join("");
 
   if (!filtered.length) {
     document.getElementById("products").innerHTML = "<p>لا توجد نتائج.</p>";
+  } else if (visibleProductCount < filtered.length) {
+    document.getElementById("products").innerHTML += `<button type="button" id="showMoreProducts">عرض 100 منتج إضافي</button>`;
+    document.getElementById("showMoreProducts").addEventListener("click", () => { visibleProductCount += 100; renderProducts(); });
   }
-  document.querySelectorAll("[data-product-details]").forEach(button => button.addEventListener("click", () => showProductDetails(button.dataset.productDetails)));
-}
-
-function showProductDetails(productId) {
-  const product = products.find(p => p.id === productId);
-  if (!product) return;
-
-  let details = "📦 تفاصيل المنتج:\n\n";
-  details += "اسم المنتج: " + product.name + "\n";
-  details += "الرقم التعريفي (ID): " + product.id + "\n";
-  details += "السعر المحسوب: " + (product.price_sdg ? product.price_sdg.toLocaleString("en-US") + " SDG" : "غير محدد") + "\n";
-
-  alert(details);
+  document.querySelectorAll("[data-save-product]").forEach(button => button.addEventListener("click", () => saveProductSettings(button.dataset.saveProduct)));
 }
 
 function escapeHtml(value) {
