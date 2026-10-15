@@ -3,7 +3,7 @@
   "pricing": {
     "usdToSdg": 8300,
     "referenceUsdToSdg": 8275,
-    "markup": 0.10,
+    "markup": 0.1,
     "finalPrices": {
       "pubg_mobile_auto": {
         "60_uc": 7950,
@@ -15,5 +15,10 @@
         "3850_uc": 400000
       }
     }
+  },
+  "catalog": {
+    "version": 1,
+    "categoryRules": {},
+    "notes": "Fazer categories must be classified using provider category IDs in the protected store_settings record. No provider category is inferred from its name. Top-ups default to other until an administrator classifies the category."
   }
 }
