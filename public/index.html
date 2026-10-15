@@ -37,6 +37,7 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:
 .payment-options{display:grid;gap:10px;margin-top:12px}.payment-option{border:1px solid #244c76;background:#06152b;color:#fff;border-radius:13px;padding:14px;text-align:right}.payment-option.selected{border-color:#fff;background:#0b2546}.payment-option strong{display:block}.payment-option small{display:block;color:#8da6c1;margin-top:5px}  
 .review-box{background:#06152b;border:1px solid #173a64;border-radius:14px;padding:14px;margin-top:12px;line-height:1.9}.review-row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #173452;padding:8px 0}.review-row:last-child{border-bottom:0}  
 .success-box{text-align:center;padding:10px 0 5px}.success-icon{width:70px;height:70px;margin:5px auto 15px;border-radius:50%;display:grid;place-items:center;background:#0c3a38;border:1px solid #2a9d83;color:var(--success);font-size:35px}.order-number{direction:ltr;font-weight:900;font-size:22px;color:#62adff;margin:12px 0}.status-box{background:#0b263f;border:1px solid #23547e;border-radius:12px;padding:12px;color:#b8d1e8;font-size:13px;line-height:1.7}.status{font-size:12px;color:#82a0bf}  
+.religious-disclaimer{margin:12px 0;padding:14px;border:1px solid #9b792e;border-right:4px solid #d5ad4e;border-radius:13px;background:linear-gradient(135deg,#17243a,#101b2c);color:#f3e3b7;font-size:14px;line-height:1.9;overflow-wrap:anywhere}.religious-disclaimer strong{display:block;margin-bottom:5px;color:#f0c65e;font-size:15px}.religious-disclaimer p{margin:0}
 footer{padding:35px 0 50px;text-align:center;color:#6f89a6;font-size:12px}.toast{position:fixed;z-index:80;bottom:20px;left:50%;transform:translateX(-50%) translateY(120px);background:#fff;color:#062f68;padding:11px 16px;border-radius:12px;font-weight:800;box-shadow:var(--shadow);transition:.25s}.toast.show{transform:translateX(-50%) translateY(0)}  
 @media(min-width:700px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.hero{padding-top:55px}}@media(min-width:1000px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}@media(max-width:480px){.header-inner{height:62px}.brand{font-size:18px}.hero-card{padding:20px}.grid{gap:10px}.card{padding:12px}.product-name{font-size:14px}}  
   
@@ -111,8 +112,18 @@ body{background:radial-gradient(ellipse at 50% -18%,#153656 0,#0a1d32 35%,#040b1
 .modal{background:rgba(1,7,14,.76)}.modal-box{background:#091a2b;color:#edf2f5;border-color:#294861;box-shadow:0 24px 80px rgba(0,0,0,.48)}.modal-head{border-color:#203d55}.modal-head h2{color:#e9f3f6}.close{background:#0c2034;border-color:#2b4a63;color:#e3ebef}
 .field label{color:#c1d0da}.field input,.field select,.field textarea,.payment-option,.review-box{background:#071729;color:#edf2f5;border-color:#294861}.field input:focus,.field select:focus,.field textarea:focus{border-color:#5be3f1}.payment-option small,.order-item small{color:#adbbc6}.payment-option.selected{border-color:#dec16e;background:#13283a;box-shadow:0 0 0 2px rgba(220,190,102,.12)}.order-items,.order-item,.review-row{border-color:#203d55}.status-box{background:#0d293e;border-color:#2d7283;color:#c9dbe2}.success-icon{background:#0c3531;border-color:#278b76;color:#63e1bb}
 .policies{background:#091a2b;border-color:#203d55}.policies h2{color:#f0f4f6}.policy-card{background:#0c2034;border-color:#203d55}.policy-card h3{color:#67ddea}.policy-card p{color:#b4c1cb}.support-link{background:linear-gradient(135deg,#f5e6b4,#d9b761,#b3822d);color:#211806}.support-link:hover{filter:brightness(1.08);background:linear-gradient(135deg,#f5e6b4,#d9b761,#b3822d)}
-footer{color:#9baab7}.toast{background:#dffaff;color:#073040;border:1px solid #6de3f0}
-button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #55e3f0;outline-offset:3px}
+ footer{color:#9baab7}.toast{background:#dffaff;color:#073040;border:1px solid #6de3f0}
+ .product-art{height:132px;position:relative;display:grid;place-items:center;overflow:hidden;border-radius:15px;background:linear-gradient(145deg,#0a1b2d,#102b42);border:1px solid #243f56;margin-bottom:12px}
+ .product-art .product-icon{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);margin:0}
+ .product-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:8px;z-index:1;background:#071627}
+ .product-price del{font-size:12px;font-weight:500;color:#a7b5c2}
+ .religious-disclaimer{background:linear-gradient(135deg,#17243a,#101b2c);border-color:#9b792e;border-inline-start:4px solid #d5ad4e;color:#f3e3b7}
+ .religious-disclaimer strong{color:#f0c65e}
+ .policy-consent{display:flex;align-items:flex-start;gap:10px;margin-top:14px;padding:12px;border:1px solid #9b792e;border-radius:12px;background:#152234;color:#f3e3b7;line-height:1.7}
+ .policy-consent input{width:20px;height:20px;flex:none;accent-color:#d9b761;margin-top:2px}
+ .policies{scroll-margin-top:90px}
+ @media(max-width:480px){.product-art{height:108px}.religious-disclaimer{font-size:13px;padding:11px}}
+ button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #55e3f0;outline-offset:3px}
 </style>  
 </head>  
 <body>  
@@ -121,11 +132,11 @@ button:focus-visible,a:focus-visible,input:focus-visible{outline:3px solid #55e3
 <section class="hero"><div class="hero-card"><div class="hero-eyebrow" id="heroEyebrow">✦ متجر أبيشا الرقمي</div><h1 id="heroTitle">كل عالمك الرقمي، في مكان واحد.</h1><p id="heroText">اشحن ألعابك واكتشف بطاقاتك ومنتجاتك الرقمية المفضلة — بخطوات بسيطة وأسعار واضحة.</p><input class="search" id="search" placeholder="ابحث عن لعبة أو بطاقة أو شحن..." autocomplete="off" aria-label="ابحث عن منتج"><a class="hero-cta" id="heroCta" href="#products">تصفح كل المنتجات <span aria-hidden="true">←</span></a></div></section>
 <div class="account-bar" id="accountBar"></div>  
 <section class="trust-row" aria-label="معلومات المتجر"><div class="trust-item"><span class="trust-icon">🎮</span><span><strong>كل احتياجاتك الرقمية</strong><small>ألعاب، شحن، بطاقات واشتراكات</small></span></div><div class="trust-item"><span class="trust-icon">💜</span><span><strong>السعر واضح قبل الطلب</strong><small>راجع الإجمالي قبل إتمام الشراء</small></span></div><div class="trust-item"><span class="trust-icon">📦</span><span><strong>تابع طلباتك بسهولة</strong><small>سجّل الدخول لمراجعة حالة طلبك</small></span></div></section>
-<div class="toolbar" id="categories"><button class="cat active" data-cat="all" type="button">الكل</button><button class="cat" data-cat="mobile" type="button">شحن الألعاب</button><button class="cat" data-cat="game" type="button">الألعاب</button><button class="cat" data-cat="gift" type="button">بطاقات الهدايا</button><button class="cat" data-cat="subscription" type="button">الاشتراكات</button><button class="cat" data-cat="steam" type="button">Steam</button></div>  
+<div class="toolbar" id="categories"><button class="cat active" data-cat="all" type="button">الكل</button><button class="cat" data-cat="mobile" type="button">شحن الألعاب</button><button class="cat" data-cat="game" type="button">الألعاب والمفاتيح</button><button class="cat" data-cat="gift" type="button">بطاقات الهدايا</button><button class="cat" data-cat="subscription" type="button">الاشتراكات</button><button class="cat" data-cat="steam" type="button">Steam</button><button class="cat" data-cat="other" type="button">منتجات أخرى</button></div>
 <div class="section-head"><h2 id="productsTitle">المنتجات</h2><span class="status" id="status">جاري الاتصال...</span></div>  
 <div class="notice" id="notice" style="text-align:center">يتم مراجعة التحويل يدويًا قبل بدء تنفيذ الطلب.</div>
 <section class="grid" id="products" aria-live="polite"><div class="empty">جاري تحميل الكتالوج...</div></section>
-<section class="policies" aria-labelledby="policiesTitle"><h2 id="policiesTitle">معلومات تهمك</h2><div class="policy-grid"><article class="policy-card"><h3 id="deliveryTitle">التسليم</h3><p id="deliveryCopy">يبدأ تنفيذ الطلب بعد التحقق من الدفع، وعادةً يكتمل خلال دقائق.</p></article><article class="policy-card"><h3 id="refundTitle">الاسترجاع والدعم</h3><p id="refundCopy">لا يمكن استرجاع أو استبدال الأكواد بعد تسليمها واستخدامها بنجاح. عند وجود مشكلة تقنية، تواصل مع الدعم للتحقق خلال 24 ساعة.</p></article><article class="policy-card"><h3 id="accuracyTitle">راجع بياناتك</h3><p id="accuracyCopy">تأكد من صحة معرّفات اللعبة ورقم التحويل قبل إرسال الطلب.</p></article></div><a class="support-link" id="supportLink" href="https://wa.me/249968247932" target="_blank" rel="noopener noreferrer">💬 تواصل عبر واتساب <span dir="ltr">0968247932</span></a></section>
+<section class="policies" aria-labelledby="policiesTitle"><h2 id="policiesTitle">معلومات تهمك قبل الشراء</h2><div class="policy-grid"><article class="policy-card"><h3 id="deliveryTitle">المنتجات الرقمية والتنفيذ</h3><p id="deliveryCopy">المنتجات رقمية وليست سلعًا مادية. نراجع الدفع يدويًا، ولا نرسل طلب الشحن إلى Fazer قبل تأكيد استلامه. يبدأ التنفيذ بعد التأكيد، والمدة تقديرية وقد تتأثر بتوفر المزود.</p></article><article class="policy-card"><h3 id="refundTitle">الإلغاء والاسترداد</h3><p id="refundCopy">يمكن طلب الإلغاء قبل بدء التنفيذ. إذا لم يُسلَّم المنتج أو فشل التنفيذ أو وصل منتج غير مطابق أو حدث خصم مكرر، تواصل معنا للتحقق؛ سنعالج الحالة بإعادة التنفيذ أو الاستبدال أو رد المبلغ حسب الحالة والقانون الواجب التطبيق. بعد التسليم الصحيح، قد تُقيَّد طلبات تغيير الرأي في المحتوى الرقمي فقط حيث يسمح القانون بذلك.</p></article><article class="policy-card"><h3 id="accuracyTitle">حقوقك والمعلومات المطلوبة</h3><p id="accuracyCopy">راجع وصف المنتج وبيانات الحساب وسعره والإجمالي قبل التأكيد. لا تنتقص هذه السياسة من أي حق إلزامي لك بموجب القانون؛ وعند التعارض تسود الحقوق القانونية الواجبة التطبيق. تواصل مع الدعم بأسرع وقت عند وجود مشكلة.</p></article></div><a class="support-link" id="supportLink" href="https://wa.me/249968247932" target="_blank" rel="noopener noreferrer">💬 تواصل عبر واتساب <span dir="ltr">0968247932</span></a></section>
 <footer><span id="footerBrand">ABESHA STORE — منتجاتك الرقمية بسهولة</span></footer>
 </main>  
   
@@ -157,6 +168,7 @@ const state={
   lang:"ar",  
   visibleCount:24,  
   checkoutStep:1,  
+  policiesAccepted:false,
   customer:{name:"",phone:"",payment:"",paymentReference:"",note:""},  
   auth:null,  
   authMode:"login",  
@@ -165,6 +177,7 @@ const state={
   
 const $=id=>document.getElementById(id);  
 const productsBox=$("products");  
+const RELIGIOUS_DISCLAIMER="عميلنا العزيز، نحن نوفر خدمة الشحن لاستخدامها في المزايا المباحة داخل الألعاب (كتطوير الحساب، والأسلحة المباحة، والأزياء الساترة). ونحن نبرأ إلى الله تعالى من أي استخدام غير شرعي لهذه العملات (كشراء ملابس خادشة للحياء، الموسيقى، أو المراهنات والمقامرة داخل اللعبة). بشرائك من متجرنا، أنت تتعهد بالاستخدام الآمن والمباح.";
   
 /* =========================  
    HELPERS  
@@ -196,7 +209,11 @@ function nameOf(p){
 }  
   
 function typeOf(p){  
-  return p.type || p.category || "Digital";  
+  const type=String(p.type||"").toLowerCase();
+  const labels=state.lang==="en"
+    ? {topup:"Top-up",giftcard:"Gift card",gift_card:"Gift card",gamekey:"Game key",game_key:"Game key",subscription:"Subscription"}
+    : {topup:"شحن",giftcard:"بطاقة هدايا",gift_card:"بطاقة هدايا",gamekey:"مفتاح لعبة",game_key:"مفتاح لعبة",subscription:"اشتراك"};
+  return labels[type]|| (state.lang==="en"?"Digital product":"منتج رقمي");
 }  
   
 function usdOf(p){  
@@ -205,29 +222,15 @@ function usdOf(p){
   
 function categoryOf(p){  
   const serverCategory=String(p.store_category||p.storeCategory||"").toLowerCase();  
-  if(["mobile","game","gift","subscription","steam"].includes(serverCategory)) return serverCategory;  
-  
-  const family=String(p.family||p.product_family||p.productFamily||"").toLowerCase();  
-  const raw=[  
-    p.category,p.subcategory,p.type,p.brand,p.name,p.title,p.product_name,  
-    p.productName,p.description,p.platform,p.tags  
-  ].flat().filter(Boolean).join(" ").toLowerCase();  
-  
-  if(family==="steam" || /\bsteam\b/.test(raw)) return "steam";  
-  const subscriptionSignals=[  
-    "subscription","membership","netflix","spotify","game pass",  
-    "xbox game pass","playstation plus","ps plus","apple music",  
-    "youtube premium","prime video","disney+","disney plus",  
-    "crunchyroll","discord nitro","nitro"  
-  ];  
-  if(subscriptionSignals.some(x=>raw.includes(x))) return "subscription";  
-  if(family==="giftcard" || family==="gift_card" || family==="gift-card") return "gift";  
-  if(family==="topup") return "mobile";  
-  if(family==="gamekey" || family==="game_key" || family==="game-key") return "game";  
-  if(/\b(pubg|free fire|roblox|valorant|mobile legends|call of duty mobile)\b/.test(raw)) return "mobile";  
-  if(/gift card|giftcard|google play|apple gift|playstation|xbox|nintendo/.test(raw)) return "gift";  
-  return "game";  
-}  
+  if(["mobile","game","gift","subscription","steam","other"].includes(serverCategory)) return serverCategory;
+  const productType=String(p.type||"").toLowerCase();
+  // Do not assume every top-up is a game: Fazer's endpoint also includes platform products.
+  if(productType==="topup") return "other";
+  if(productType==="giftcard"||productType==="gift_card") return "gift";
+  if(productType==="gamekey"||productType==="game_key") return "game";
+  if(productType==="subscription") return "subscription";
+  return "other";
+}
 
 function featuredRank(p){
   const raw=[p.name,p.title,p.category,p.subcategory,p.type,p.brand,p.product_name,p.product_family,p.description,p.platform,p.tags].flat().filter(Boolean).join(" ").toLowerCase();
@@ -280,7 +283,7 @@ function updateCart(){
   $("cartCount").textContent=state.cart.length;  
   
   if(!state.cart.length){  
-    $("cartItems").innerHTML='<div class="empty">السلة فارغة حاليًا.</div>';  
+    $("cartItems").innerHTML=`<div class="empty">${state.lang==="en"?"Your cart is empty.":"السلة فارغة حاليًا."}</div>`;
     $("cartTotal").textContent="0 SDG";  
     return;  
   }  
@@ -292,7 +295,7 @@ function updateCart(){
         ${item.qty?`<small>${esc(item.qty)} UC</small>`:""}  
         <small dir="ltr">${formatSDG(item.price)}</small>  
       </div>  
-      <button class="remove" type="button" data-remove="${index}">حذف</button>  
+       <button class="remove" type="button" data-remove="${index}">${state.lang==="en"?"Remove":"حذف"}</button>
     </div>  
   `).join("");  
   
@@ -326,7 +329,9 @@ function render(){
   }).sort((a,b)=>featuredRank(a)-featuredRank(b));  
   
   if(!state.filtered.length){  
-    productsBox.innerHTML='<div class="empty">لا توجد منتجات مطابقة حاليًا.</div>';  
+    productsBox.innerHTML=state.products.length
+      ? `<div class="empty">${state.lang==="en"?"No matching products.":"لا توجد منتجات مطابقة حاليًا."}</div>`
+      : `<div class="empty">${state.lang==="en"?"The catalog is currently empty.":"الكتالوج فارغ حاليًا."}</div>`;
     return;  
   }  
   
@@ -367,15 +372,26 @@ function renderProduct(p){
   const icon=categoryOf(p)==="mobile"?"🎮":categoryOf(p)==="gift"?"🎁":categoryOf(p)==="subscription"?"⭐":categoryOf(p)==="steam"?"🟦":"🕹️";  
   const featured=featuredRank(p)<3;
   const featuredLabel=state.lang==="en"?"Featured":"اختيار مميز";
+  let image="";
+  try{const candidate=new URL(String(p.image_url||""),location.origin);if(candidate.protocol==="https:"&&!candidate.username&&!candidate.password)image=candidate.href}catch{}
+  const disclaimer=p.type==="topup"&&p.religious_disclaimer===true;
+  const disclaimerText=state.lang==="en"
+    ? "We provide game top-ups for permissible in-game benefits. Please use these credits lawfully and responsibly."
+    : RELIGIOUS_DISCLAIMER;
+  const categoryName=state.lang==="en"
+    ? ({mobile:"Game top-ups",game:"Games and keys",gift:"Gift cards",subscription:"Subscriptions",steam:"Steam",other:"Other digital products"}[categoryOf(p)]||"Digital product")
+    : ({mobile:"شحن ألعاب",game:"ألعاب ومفاتيح",gift:"بطاقات هدايا",subscription:"اشتراكات",steam:"Steam",other:"منتجات رقمية أخرى"}[categoryOf(p)]||"منتج رقمي");
+  const buyLabel=state.lang==="en"?(price?"Add to cart":"Unavailable"):(price?"أضف للسلة":"غير متاح");
   
   return `  
     <article class="card">  
       ${featured?`<div class="featured-tag">✦ ${featuredLabel}</div>`:""}
-      <div class="product-icon">${icon}</div>  
+      <div class="product-art"><span class="product-icon" aria-hidden="true">${icon}</span>${image?`<img class="product-image" src="${esc(image)}" alt="${esc(name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.remove()">`:""}</div>
       <div class="product-name">${esc(name)}</div>  
-      <div class="product-type">${esc(typeOf(p))}</div>  
-      <div class="product-price">${price?formatSDG(price):"السعر قريبًا"}</div>  
-      <button class="buy" type="button" data-add="1" data-id="${esc(id)}" data-name="${esc(name)}" data-price="${price||0}">${price?"أضف للسلة":"غير متاح"}</button>
+      <div class="product-type">${esc(categoryName)} · ${esc(typeOf(p))}</div>
+      <div class="product-price">${price?(p.discount_percent?`<del>${formatSDG(p.regular_price_sdg)}</del> `:" ")+formatSDG(price):(state.lang==="en"?"Price unavailable":"السعر قريبًا")}</div>
+      ${disclaimer?`<aside class="religious-disclaimer" role="note"><strong>${state.lang==="en"?"Responsible use notice":"تنبيه شرعي"}</strong><p>${esc(disclaimerText)}</p></aside>`:""}
+      <button class="buy" type="button" data-add="1" data-id="${esc(id)}" data-name="${esc(name)}" data-price="${price||0}">${buyLabel}</button>
     </article>  
   `;  
 }  
@@ -397,6 +413,7 @@ function bindProductButtons(){
         name:btn.dataset.name,  
         qty:btn.dataset.qty||"",  
         price,
+        religiousDisclaimer:product?.type==="topup"&&product?.religious_disclaimer===true,
         fields
       });  
     });  
@@ -414,9 +431,11 @@ async function loadProducts(){
     if(!r.ok) throw new Error("HTTP "+r.status);  
   
     const data=await r.json();  
+    if(data?.ok===false) throw new Error(data.error||"Catalog unavailable");
     state.products=getArray(data);  
-  
-    $("status").textContent=state.products.length.toLocaleString()+" منتج";  
+    $("status").textContent=state.lang==="en"
+      ? `${state.products.length.toLocaleString()} products`
+      : `${state.products.length.toLocaleString()} منتج`;
     state.visibleCount=24;  
     try{  
       render();  
@@ -432,6 +451,26 @@ async function loadProducts(){
   }  
 }  
   
+async function refreshCartPrices(){
+  const response=await fetch("/api/products",{cache:"no-store",headers:{Accept:"application/json"}});
+  const data=await response.json();
+  if(!response.ok||!data.ok) throw new Error("تعذر تحديث الأسعار. حاول مرة أخرى قبل إرسال الطلب.");
+  const products=getArray(data);
+  let changed=false;
+  const updated=[];
+  for(const item of state.cart){
+    const current=products.find(product=>idOf(product)===item.productId);
+    if(!current) throw new Error("أحد منتجات السلة لم يعد متاحًا. حدّث الصفحة وراجع السلة.");
+    const price=Number(current.price_sdg);
+    if(!Number.isFinite(price)||price<=0) throw new Error("تعذر التحقق من سعر أحد المنتجات.");
+    if(price!==Number(item.price)) changed=true;
+    updated.push({...item,price,name:current.name||item.name});
+  }
+  state.cart=updated;
+  updateCart();
+  return changed;
+}
+
 /* =========================  
    AUTHENTICATION  
 ========================= */  
@@ -520,7 +559,7 @@ async function loadMyOrders(){
 }  
   
 function orderStatusText(status){  
-  return ({PAYMENT_PENDING:"بانتظار تأكيد الدفع",PAYMENT_CONFIRMED:"تم تأكيد الدفع",PROCESSING:"قيد التنفيذ",COMPLETED:"مكتمل",FAILED:"فشل",CANCELLED:"ملغى"})[status]||status||"غير معروف";  
+  return ({PAYMENT_PENDING:"بانتظار تأكيد الدفع",PAYMENT_CONFIRMED:"تم تأكيد الدفع",PROCESSING:"قيد التنفيذ",FULFILLED:"مكتمل",COMPLETED:"مكتمل",FAILED:"فشل",CANCELLED:"ملغى"})[status]||status||"غير معروف";
 }  
   
 /* =========================  
@@ -539,12 +578,15 @@ async function openCheckout(){
   }  
   
   try{  
+    const pricesChanged=await refreshCartPrices();
     const r=await fetch("/api/auth/me",{credentials:"same-origin",cache:"no-store"});  
     const data=await r.json().catch(()=>({}));  
     if(data.authenticated){  
       state.auth=data.customer;  
       state.checkoutStep=1;  
+      state.policiesAccepted=false;
       state.customer={name:data.customer.name,phone:data.customer.phone,payment:"",paymentReference:"",note:""};  
+      state.checkoutPricesChanged=pricesChanged;
       updateAccountBar();  
       updateSteps();  
       renderCheckoutStep();  
@@ -567,17 +609,25 @@ function renderCheckoutStep(){
   updateSteps();  
   
   if(state.checkoutStep===1){  
-    $("orderTitle").textContent="بيانات الحساب";  
+    const en=state.lang==="en";
+    $("orderTitle").textContent=en?"Account details":"بيانات الحساب";
     $("orderContent").innerHTML=`  
       <div class="review-box">  
-        <div class="review-row"><span>الاسم</span><strong>${esc(state.auth?.name||"")}</strong></div>  
-        <div class="review-row"><span>واتساب</span><strong dir="ltr">${esc(state.auth?.phone||"")}</strong></div>  
+        <div class="review-row"><span>${en?"Name":"الاسم"}</span><strong>${esc(state.auth?.name||"")}</strong></div>
+        <div class="review-row"><span>${en?"WhatsApp":"واتساب"}</span><strong dir="ltr">${esc(state.auth?.phone||"")}</strong></div>
+        <div class="review-row"><span>${en?"Current cart total":"إجمالي السلة الحالي"}</span><strong>${formatSDG(cartTotal())}</strong></div>
       </div>  
-      <div class="field"><label>ملاحظات إضافية</label><textarea id="customerNote" placeholder="اختياري">${esc(state.customer.note)}</textarea></div>  
-      <button class="primary" id="nextStep" type="button" style="margin-top:16px">التالي</button>  
+      ${state.checkoutPricesChanged?`<div class="notice">${en?"Cart prices changed. Review the new total before payment.":"تم تحديث أسعار السلة. راجع الإجمالي الجديد قبل الدفع."}</div>`:""}
+      <div class="field"><label>${en?"Additional notes":"ملاحظات إضافية"}</label><textarea id="customerNote" placeholder="${en?"Optional":"اختياري"}">${esc(state.customer.note)}</textarea></div>
+      <button class="primary" id="nextStep" type="button" style="margin-top:16px">${en?"Continue":"التالي"}</button>
     `;  
-    $("nextStep").addEventListener("click",()=>{  
+    $("nextStep").addEventListener("click",async()=>{
       state.customer.note=$("customerNote").value.trim();  
+      try{
+        const pricesChanged=await refreshCartPrices();
+        if(pricesChanged){state.checkoutPricesChanged=true;renderCheckoutStep();toast(state.lang==="en"?"Prices changed; review the updated total":"تغيرت الأسعار؛ راجع الإجمالي قبل متابعة الدفع");return;}
+      }catch(error){toast(error.message);return;}
+      state.checkoutPricesChanged=false;
       state.checkoutStep=2;  
       renderCheckoutStep();  
     });  
@@ -585,21 +635,22 @@ function renderCheckoutStep(){
   }  
   
   if(state.checkoutStep===2){  
-    $("orderTitle").textContent="اختيار طريقة الدفع";  
+    const en=state.lang==="en";
+    $("orderTitle").textContent=en?"Choose a payment method":"اختيار طريقة الدفع";
     $("orderContent").innerHTML=`  
       <div class="notice" id="paymentInstructions">${state.lang==="en"?"Transfer to the account, verify the name shown in your payment app and let us know. Enter the transaction reference; we manually verify payment before fulfillment.":"حوّل إلى رقم الحساب، وتحقق من الاسم الظاهر في تطبيق الدفع وأخبرنا به. أدخل رقم العملية؛ نراجع التحويل يدويًا قبل بدء تنفيذ الطلب."}</div>
       <div class="payment-options">  
         <button class="payment-option" data-payment="Bankak" type="button"><strong>🏦 Bankak</strong><small>${state.lang==="en"?"Account number: 3013500":"رقم الحساب: 3013500"}<br>${state.lang==="en"?"Verify the name and inform me":"تحقق من الاسم وأخبرني"}</small></button>
         <button class="payment-option" data-payment="MyCashi" type="button"><strong>💳 MyCash</strong><small>${state.lang==="en"?"Account number: 402880417":"رقم الحساب: 402880417"}<br>${state.lang==="en"?"Verify the name and inform me":"تحقق من الاسم وأخبرني"}</small></button>
       </div>  
-      <div class="field" style="margin-top:14px"><label>رقم العملية (مطلوب)</label><input id="paymentReference" type="text" inputmode="text" placeholder="رقم مرجع التحويل" required></div>
-      <button class="secondary" id="backStep" type="button" style="margin-top:16px">رجوع</button>  
+      <div class="field" style="margin-top:14px"><label>${en?"Transaction reference (required)":"رقم العملية (مطلوب)"}</label><input id="paymentReference" type="text" inputmode="text" placeholder="${en?"Transfer reference":"رقم مرجع التحويل"}" required></div>
+      <button class="secondary" id="backStep" type="button" style="margin-top:16px">${en?"Back":"رجوع"}</button>
     `;  
   
     document.querySelectorAll("[data-payment]").forEach(btn=>{  
       btn.addEventListener("click",()=>{  
         const reference=$("paymentReference").value.trim();
-        if(!reference){toast("أدخل رقم العملية أولاً");return;}
+        if(!reference){toast(state.lang==="en"?"Enter the transaction reference first":"أدخل رقم العملية أولاً");return;}
         state.customer.payment=btn.dataset.payment;  
         state.customer.paymentReference=reference;
         state.checkoutStep=3;  
@@ -615,13 +666,14 @@ function renderCheckoutStep(){
   }  
   
   if(state.checkoutStep===3){  
-    $("orderTitle").textContent="مراجعة الطلب";  
+    const en=state.lang==="en";
+    $("orderTitle").textContent=en?"Review your order":"مراجعة الطلب";
   
     const items=state.cart.map(item=>`  
       <div class="order-item">  
         <div>  
           <strong>${esc(item.name)}</strong>  
-          ${item.qty?`<small>${esc(item.qty)} UC</small>`:""}  
+      ${item.qty?`<small>${esc(item.qty)} ${en?"units":"وحدة"}</small>`:""}
         </div>  
         <strong>${formatSDG(item.price)}</strong>  
       </div>  
@@ -630,17 +682,21 @@ function renderCheckoutStep(){
     $("orderContent").innerHTML=`  
       <div class="order-items">${items}</div>  
       <div class="review-box">  
-        <div class="review-row"><span>الاسم</span><strong>${esc(state.customer.name)}</strong></div>  
-        <div class="review-row"><span>واتساب</span><strong dir="ltr">${esc(state.customer.phone)}</strong></div>  
-        <div class="review-row"><span>الدفع</span><strong>${esc(state.customer.payment)}</strong></div>  
-        <div class="review-row"><span>رقم العملية</span><strong>${esc(state.customer.paymentReference||"—")}</strong></div>  
-        <div class="review-row"><span>الإجمالي</span><strong>${formatSDG(cartTotal())}</strong></div>  
+        <div class="review-row"><span>${en?"Name":"الاسم"}</span><strong>${esc(state.customer.name)}</strong></div>
+        <div class="review-row"><span>WhatsApp</span><strong dir="ltr">${esc(state.customer.phone)}</strong></div>
+        <div class="review-row"><span>${en?"Payment":"الدفع"}</span><strong>${esc(state.customer.payment)}</strong></div>
+        <div class="review-row"><span>${en?"Transaction reference":"رقم العملية"}</span><strong>${esc(state.customer.paymentReference||"—")}</strong></div>
+        <div class="review-row"><span>${en?"Total":"الإجمالي"}</span><strong>${formatSDG(cartTotal())}</strong></div>
       </div>  
-      ${state.customer.note?`<div class="notice">ملاحظة العميل: ${esc(state.customer.note)}</div>`:""}  
-      <button class="primary" id="submitOrder" type="button" style="margin-top:16px">إرسال الطلب</button>  
-      <button class="secondary" id="backStep" type="button">رجوع</button>  
+      ${state.customer.note?`<div class="notice">${en?"Customer note":"ملاحظة العميل"}: ${esc(state.customer.note)}</div>`:""}
+      <div class="notice"><strong>${en?"Delivery and refund terms":"شروط التنفيذ والاسترداد"}</strong><br>${en?"We verify payment before fulfillment. You may request cancellation before fulfillment begins. Failed, missing, duplicate or misdescribed orders will be reviewed for re-fulfillment, replacement or refund as applicable. Mandatory legal rights are not waived.":"نتحقق من الدفع قبل التنفيذ. يمكنك طلب الإلغاء قبل بدء التنفيذ. نراجع حالات عدم التسليم أو فشل التنفيذ أو الخصم المكرر أو عدم مطابقة الوصف لمعالجتها بإعادة التنفيذ أو الاستبدال أو الاسترداد حسب الحالة. لا تتنازل عن أي حق قانوني إلزامي."}</div>
+      ${state.cart.some(item=>item.religiousDisclaimer)?`<aside class="religious-disclaimer" role="note"><strong>${en?"Responsible use notice":"تنبيه شرعي"}</strong><p>${en?"We provide game top-ups for permissible in-game benefits. Please use these credits lawfully and responsibly.":esc(RELIGIOUS_DISCLAIMER)}</p></aside>`:""}
+      <label class="policy-consent"><input id="policiesAccepted" type="checkbox" ${state.policiesAccepted?"checked":""}> <span>${en?"I reviewed the product details, total, delivery and refund terms.":"أقر بأنني راجعت تفاصيل المنتجات والإجمالي وشروط التنفيذ والاسترداد."}</span></label>
+      <button class="primary" id="submitOrder" type="button" style="margin-top:16px">${en?"Place order":"إرسال الطلب"}</button>
+      <button class="secondary" id="backStep" type="button">${en?"Back":"رجوع"}</button>
     `;  
   
+    $("policiesAccepted").addEventListener("change",event=>{state.policiesAccepted=event.target.checked});
     $("submitOrder").addEventListener("click",submitOrder);  
     $("backStep").addEventListener("click",()=>{  
       state.checkoutStep=2;  
@@ -650,15 +706,16 @@ function renderCheckoutStep(){
   }  
   
   if(state.checkoutStep===4){  
-    $("orderTitle").textContent="تم إنشاء الطلب";  
+    const en=state.lang==="en";
+    $("orderTitle").textContent=en?"Order received":"تم إنشاء الطلب";
     $("orderContent").innerHTML=`  
       <div class="success-box">  
         <div class="success-icon">✓</div>  
-        <h2>تم استلام الطلب</h2>  
-        <p class="muted">رقم الطلب:</p>  
+         <h2>${en?"Order received":"تم استلام الطلب"}</h2>
+         <p class="muted">${en?"Order number:":"رقم الطلب:"}</p>
         <div class="order-number">${esc(state.orderNumber)}</div>  
-        <div class="status-box">حالة الطلب الحالية: <strong>بانتظار تأكيد الدفع</strong><br>تم تسجيل الطلب. نتحقق من التحويل يدويًا قبل بدء التنفيذ، ويكتمل عادةً خلال دقائق بعد التأكيد.</div>  
-        <button class="primary" id="finishOrder" type="button" style="margin-top:18px">إغلاق</button>  
+         <div class="status-box">${en?"Current order status:":"حالة الطلب الحالية:"} <strong>${en?"Awaiting payment verification":"بانتظار تأكيد الدفع"}</strong><br>${en?"The order is recorded. We manually verify the transfer before fulfillment; completion is usually within minutes after confirmation.":"تم تسجيل الطلب. نتحقق من التحويل يدويًا قبل بدء التنفيذ، ويكتمل عادةً خلال دقائق بعد التأكيد."}</div>
+         <button class="primary" id="finishOrder" type="button" style="margin-top:18px">${en?"Close":"إغلاق"}</button>
       </div>  
     `;  
   
@@ -670,6 +727,7 @@ function renderCheckoutStep(){
 }  
   
 async function submitOrder(){  
+  if(!state.policiesAccepted){toast(state.lang==="en"?"Please confirm that you reviewed the order and policies":"يرجى تأكيد مراجعة تفاصيل الطلب والسياسات");return;}
   const btn=$("submitOrder");  
   btn.disabled=true;  
   btn.textContent="جاري إرسال الطلب...";  
@@ -677,13 +735,30 @@ async function submitOrder(){
     const payload={  
       items:state.cart.map(item=>({productId:item.productId,quantity:item.qty||1,fields:item.fields||{}})),  
       paymentMethod:state.customer.payment,  
-      paymentReference:state.customer.paymentReference||""  
+      paymentReference:state.customer.paymentReference||"",
+      note:state.customer.note||"",
+      expectedTotal:cartTotal()
     };  
-    const r=await fetch("/api/orders",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});  
+    let requestKey=sessionStorage.getItem("abesha-order-retry-key");
+    if(!requestKey){requestKey=crypto.randomUUID();sessionStorage.setItem("abesha-order-retry-key",requestKey);}
+    const r=await fetch("/api/orders",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","Idempotency-Key":requestKey},body:JSON.stringify(payload)});
     const data=await r.json().catch(()=>({}));  
-    if(!r.ok)throw new Error(data.error||"تعذر إنشاء الطلب");  
+    if(!r.ok){
+      if(r.status===409)sessionStorage.removeItem("abesha-order-retry-key");
+      if(r.status===409&&Number.isFinite(Number(data.total))){
+        await refreshCartPrices();
+        state.checkoutPricesChanged=true;
+        state.policiesAccepted=false;
+        renderCheckoutStep();
+        toast(state.lang==="en"?"The total changed. Review the updated cart and confirm again.":"تغير إجمالي الطلب. راجع السلة والسعر الجديد ثم أكّد مجددًا.");
+        return;
+      }
+      throw new Error(data.error||(state.lang==="en"?"Could not create the order":"تعذر إنشاء الطلب"));
+    }
     state.orderNumber=data.order.orderNumber;  
+    sessionStorage.removeItem("abesha-order-retry-key");
     state.cart=[];
+    state.policiesAccepted=false;
     updateCart();
     state.checkoutStep=4;  
     renderCheckoutStep();  
@@ -736,8 +811,24 @@ function setLanguage(){
     ][index];  
     if(copy){item.querySelector("strong").textContent=copy[0];item.querySelector("small").textContent=copy[1]}  
   });  
-  const categories=en?["All","Game top-ups","Games","Gift cards","Subscriptions","Steam"]:["الكل","شحن الألعاب","الألعاب","بطاقات الهدايا","الاشتراكات","Steam"];  
+  const categories=en?["All","Game top-ups","Games and keys","Gift cards","Subscriptions","Steam","Other digital products"]:["الكل","شحن الألعاب","الألعاب والمفاتيح","بطاقات الهدايا","الاشتراكات","Steam","منتجات أخرى"];
   document.querySelectorAll(".cat").forEach((button,index)=>{if(categories[index])button.textContent=categories[index]});  
+  $("deliveryCopy").textContent=en
+    ? "Products are digital, not physical goods. We manually verify payment and do not submit a Fazer fulfillment order before confirmation. Processing starts after confirmation; timing is an estimate and may depend on provider availability."
+    : "المنتجات رقمية وليست سلعًا مادية. نراجع الدفع يدويًا، ولا نرسل طلب الشحن إلى Fazer قبل تأكيد استلامه. يبدأ التنفيذ بعد التأكيد، والمدة تقديرية وقد تتأثر بتوفر المزود.";
+  $("refundCopy").textContent=en
+    ? "You may request cancellation before fulfillment starts. If an item is not delivered, fulfillment fails, the item differs from its description, or a duplicate charge occurs, contact us for verification; we will re-fulfill, replace, or refund as appropriate and as required by law. Change-of-mind returns for digital content may be restricted only where applicable law permits."
+    : "يمكن طلب الإلغاء قبل بدء التنفيذ. إذا لم يُسلَّم المنتج أو فشل التنفيذ أو وصل منتج غير مطابق أو حدث خصم مكرر، تواصل معنا للتحقق؛ سنعالج الحالة بإعادة التنفيذ أو الاستبدال أو رد المبلغ حسب الحالة والقانون الواجب التطبيق. بعد التسليم الصحيح، قد تُقيَّد طلبات تغيير الرأي في المحتوى الرقمي فقط حيث يسمح القانون بذلك.";
+  $("accuracyCopy").textContent=en
+    ? "Review the product description, account details, price and total before confirming. This policy does not waive any mandatory rights under applicable law; those rights prevail if there is a conflict. Contact support promptly if there is a problem."
+    : "راجع وصف المنتج وبيانات الحساب وسعره والإجمالي قبل التأكيد. لا تنتقص هذه السياسة من أي حق إلزامي لك بموجب القانون؛ وعند التعارض تسود الحقوق القانونية الواجبة التطبيق. تواصل مع الدعم بأسرع وقت عند وجود مشكلة.";
+  $("policiesTitle").textContent=en?"Before you buy":"معلومات تهمك قبل الشراء";
+  $("deliveryTitle").textContent=en?"Digital products and delivery":"المنتجات الرقمية والتنفيذ";
+  $("refundTitle").textContent=en?"Cancellation and refunds":"الإلغاء والاسترداد";
+  $("accuracyTitle").textContent=en?"Your details and legal rights":"حقوقك والمعلومات المطلوبة";
+  render();
+  updateCart();
+  if($("orderModal").classList.contains("open"))renderCheckoutStep();
   
 }  
   
